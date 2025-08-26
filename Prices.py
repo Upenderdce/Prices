@@ -548,9 +548,76 @@ import sqlite3
 # =====================
 st.set_page_config(page_title="Car Price Dashboard", layout="wide")
 
+
 # =====================
 # THEME TOGGLE
 # =====================
+def apply_theme(light_mode: bool):
+    if light_mode:
+        custom_css = """
+        <style>
+        /* App background and text */
+        .stApp { background-color: #FFFFFF; color: #000000; }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background-color: #F5F5F5;
+            color: #000000;
+        }
+
+        /* Multiselect tags */
+        .stMultiSelect div[data-baseweb="tag"] {
+            background-color: #e0e0e0;
+            color: #000000;
+        }
+
+        /* Buttons */
+        .stButton>button {
+            background-color: #f0f0f0;
+            color: #000000;
+            border-radius: 8px;
+        }
+
+        /* Plotly chart background */
+        .js-plotly-plot .plotly {
+            background-color: #FFFFFF !important;
+        }
+        </style>
+        """
+    else:
+        custom_css = """
+        <style>
+        /* App background and text */
+        .stApp { background-color: #181818; color: #FFFFFF; }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background-color: #262626;
+            color: #FFFFFF;
+        }
+
+        /* Multiselect tags */
+        .stMultiSelect div[data-baseweb="tag"] {
+            background-color: #444444;
+            color: #FFFFFF;
+        }
+
+        /* Buttons */
+        .stButton>button {
+            background-color: #333333;
+            color: #FFFFFF;
+            border-radius: 8px;
+        }
+
+        /* Plotly chart background */
+        .js-plotly-plot .plotly {
+            background-color: #181818 !important;
+        }
+        </style>
+        """
+
+    st.markdown(custom_css, unsafe_allow_html=True)
+
 light_mode = st.toggle("🌙 Light Mode", value=False)  # default = dark
 
 if light_mode:
@@ -673,9 +740,11 @@ selected_variants = st.multiselect(
 
 # Only selected variants get a label
 df_filtered["label"] = df_filtered.apply(
-    lambda r: f"{r['variant']} ({r['price_lakhs']:.2f}L)" if r["variant"] in selected_variants else "",
+    lambda r: f"{r['variant']} {'CNG' if r['fuel'] == 'CNG' else ''} ({r['price_lakhs']:.2f}L)"
+    if r["variant"] in selected_variants else "",
     axis=1
 )
+
 
 # =====================
 # Chart selection
@@ -724,7 +793,7 @@ if chart_type == "Price Range Chart":
         y=df_filtered["price_lakhs"],
         mode="markers+text",
         name="Variants",
-        text=df_filtered["variant"] + "\n₹" + df_filtered["price_lakhs"].round(2).astype(str) + " L",
+        text=df_filtered["label"],
         textposition="middle right",
         hovertemplate="<b>%{text}</b><br>Model: %{x}<br>Price: ₹%{y} L<extra></extra>",
         marker=dict(
@@ -806,12 +875,13 @@ elif chart_type == "Treemap":
     # Sort by model, then by price ascending (lowest first)
     df_sorted = df_filtered.sort_values(["model", "price_lakhs"], ascending=[True, True])
 
+    # Treemap chart
     fig = px.treemap(
         df_sorted,
         path=["brand", "model", "variant_wrapped"],
         values="price_lakhs",
         color="price_lakhs",
-        color_continuous_scale="Blues",
+        color_continuous_scale="Blues" if light_mode else "Viridis",
         title="Brand → Model → Variant Price Share",
         hover_data={
             "brand": True,
@@ -824,21 +894,22 @@ elif chart_type == "Treemap":
     # Show wrapped label + price
     fig.update_traces(
         textinfo="label+value",
-        textfont=dict(size=14, family="Arial", color="black"),
+        textfont=dict(
+            size=14,
+            family="Arial",
+            color="black" if light_mode else "white"
+        ),
         texttemplate="%{label}<br>₹%{value:.2f} L",
-        sort=False  # IMPORTANT: prevents Plotly from re-sorting
+        sort=False  # prevent Plotly from re-sorting
     )
 
-    fig.update_layout(
-        uniformtext=dict(minsize=12, mode="show")
-    )
 
 # Layout
 fig.update_layout(
     title="Car Model Price Ranges and Variant Prices (in Lakhs)",
     xaxis=dict(
         title="Model",
-        tickangle=-45,
+        tickangle=-0,
         automargin=True,
         rangeslider=dict(visible=False),  # enable slider if needed
         fixedrange=False                  # allow zoom/pan
@@ -854,10 +925,7 @@ fig.update_layout(
     font=dict(color=font_color)
 )
 
-
 st.plotly_chart(fig, use_container_width=True)
-
-
 
 
 
