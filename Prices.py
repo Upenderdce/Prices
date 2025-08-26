@@ -873,7 +873,7 @@ import sqlite3
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-
+from datetime import date
 DB_FILE = "prices.db"
 
 def load_price_history():
@@ -891,6 +891,7 @@ if df.empty:
 else:
     # Convert timestamp to datetime
     df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["date"] = df["timestamp"].dt.date   # Keep only date (day-wise)
 
     # Filters
     brand = st.selectbox("Select Brand", sorted(df["brand"].unique()))
@@ -898,15 +899,36 @@ else:
     variant = st.selectbox("Select Variant", sorted(df[(df["brand"] == brand) & (df["model"] == model)]["variant"].unique()))
 
     # Filtered data
-    df_filtered = df[(df["brand"] == brand) & (df["model"] == model) & (df["variant"] == variant)]
+    # Filtered data
+    df_filtered = df[(df["brand"] == brand) & (df["model"] == model) & (df["variant"] == variant)].copy()
 
     if df_filtered.empty:
         st.warning("No data for selected combination.")
     else:
+        # Ensure 'date' exists
+        df_filtered["date"] = pd.to_datetime(df_filtered["timestamp"]).dt.date
+
+        # --- Aggregate by date (last price of each day) ---
+        df_daywise = df_filtered.groupby("date").agg({"price": "last"}).reset_index()
+
+        # --- Fill forward till today ---
+        all_days = pd.date_range(start=df_daywise["date"].min(), end=date.today(), freq="D")
+        df_daywise = df_daywise.set_index("date").reindex(all_days).rename_axis("date").reset_index()
+
+        # Forward-fill missing prices with last known price
+        df_daywise["price"] = df_daywise["price"].ffill()
+
+        # --- Convert to Lakhs with 2 decimals ---
+        df_daywise["price_lacs"] = (df_daywise["price"] / 100000).round(2)
+
+        # --- Price change rows only ---
+        df_changes = df_daywise[df_daywise["price_lacs"].shift() != df_daywise["price_lacs"]]
+
+        # Plot chart
         fig = px.line(
-            df_filtered,
-            x="timestamp",
-            y="price",
+            df_daywise,
+            x="date",
+            y="price_lacs",
             title=f"Price Trend: {brand} {model} - {variant}",
             markers=True
         )
@@ -915,3 +937,12 @@ else:
             yaxis_title="Price (₹ Lakhs)"
         )
         st.plotly_chart(fig, use_container_width=True)
+
+        # Show price change history
+        st.subheader("📜 Price Change History")
+        st.dataframe(
+            df_changes[["date", "price_lacs"]]
+            .sort_values("date", ascending=False)
+            .rename(columns={"price_lacs": "Price (₹ Lakhs)"}),
+            use_container_width=True
+        )
