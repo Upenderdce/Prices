@@ -548,23 +548,13 @@ import sqlite3
 # =====================
 st.set_page_config(page_title="Car Price Dashboard", layout="wide")
 
-
 # =====================
 # THEME TOGGLE
 # =====================
-dark_mode = st.toggle("🌙 Dark Mode")
+light_mode = st.toggle("🌙 Light Mode", value=False)  # default = dark
 
-if dark_mode:
-    custom_css = """
-    <style>
-    .stApp { background-color: #000000; color: #FFFFFF; }
-    div, span, p, h1, h2, h3, h4, h5, h6 { color: #FFFFFF !important; }
-    .dataframe, .stDataFrame { background-color: #000000 !important; color: #FFFFFF !important; }
-    </style>
-    """
-    plot_bgcolor = "#000000"
-    font_color = "white"
-else:
+if light_mode:
+    # Light mode CSS
     custom_css = """
     <style>
     .stApp { background-color: #FFFFFF; color: #000000; }
@@ -574,8 +564,21 @@ else:
     """
     plot_bgcolor = "#FFFFFF"
     font_color = "black"
+else:
+    # Dark mode CSS
+    custom_css = """
+    <style>
+    .stApp { background-color: #000000; color: #FFFFFF; }
+    div, span, p, h1, h2, h3, h4, h5, h6 { color: #FFFFFF !important; }
+    .dataframe, .stDataFrame { background-color: #000000 !important; color: #FFFFFF !important; }
+    </style>
+    """
+    plot_bgcolor = "#000000"
+    font_color = "white"
 
+# Apply custom CSS
 st.markdown(custom_css, unsafe_allow_html=True)
+
 
 st.title("🚗 Car Price Dashboard")
 
