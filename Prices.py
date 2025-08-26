@@ -9,6 +9,9 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 import re
 import plotly.graph_objects as go
+import pandas as pd
+import plotly.express as px
+import textwrap
 # =====================
 # CONFIG
 # =====================
@@ -82,7 +85,7 @@ TATA_MODEL_CONFIGS = [
     }
 ]
 
-TATA_EDITION_LIST = ["standard", "dark"]
+TATA_EDITION_LIST = ["standard"]
 TATA_FUEL_LIST = ["1-D1MGNW9", "1-ID-1738", "1-ID-267","1-ID-268"]   # Petrol / Diesel / CNG
 TATA_TRANS_LIST = ["5-251EY13B", "5-251EY13H", "5-251EY13J", "MT", "AMT", "DCA", "DCT"]
 TATA_PRICE_RANGE = ["₹5L", "₹25L"]
@@ -537,17 +540,6 @@ def scrape_all_brands_parallel():
 # =====================
 st.set_page_config(page_title="Car Price Dashboard", layout="wide")
 
-import streamlit as st
-import pandas as pd
-import plotly.express as px
-import textwrap
-import sqlite3
-
-# =====================
-# PAGE CONFIG
-# =====================
-st.set_page_config(page_title="Car Price Dashboard", layout="wide")
-
 
 # =====================
 # THEME TOGGLE
@@ -942,7 +934,6 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from datetime import date
-DB_FILE = "prices.db"
 
 def load_price_history():
     conn = sqlite3.connect(DB_FILE)
