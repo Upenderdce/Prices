@@ -552,7 +552,7 @@ st.set_page_config(page_title="Car Price Dashboard", layout="wide")
 # =====================
 # THEME TOGGLE
 # =====================
-dark_mode = st.toggle("🌙 Dark Mode", value=True)
+dark_mode = st.toggle("🌙 Dark Mode")
 
 if dark_mode:
     custom_css = """
