@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 import re
+import plotly.graph_objects as go
 # =====================
 # CONFIG
 # =====================
@@ -551,7 +552,7 @@ st.set_page_config(page_title="Car Price Dashboard", layout="wide")
 # =====================
 # THEME TOGGLE
 # =====================
-dark_mode = st.toggle("🌙 Dark Mode")
+dark_mode = st.toggle("🌙 Dark Mode", value=True)
 
 if dark_mode:
     custom_css = """
@@ -678,21 +679,62 @@ df_filtered["label"] = df_filtered.apply(
 # =====================
 chart_type = st.radio(
     "Select Chart Type",
-    ["Scatter Plot", "Violin Plot", "Line Chart", "Treemap"],
+    ["Price Range Chart","Scatter Plot", "Violin Plot", "Line Chart", "Treemap"],  # NEW OPTION
     horizontal=True
 )
 
 model_order = (
-        df_filtered.groupby("model")["price_lakhs"]
-        .min()
-        .sort_values()
-        .index
-        .tolist()
+    df_filtered.groupby("model")["price_lakhs"]
+    .min()
+    .sort_values()
+    .index
+    .tolist()
+)
+
+
+
+if chart_type == "Price Range Chart":
+    # Build price_range_df for min/max
+    price_range_df = (
+        df_filtered.groupby("model")
+        .agg(min_price_lakh=("price_lakhs", "min"),
+             max_price_lakh=("price_lakhs", "max"))
+        .reset_index()
     )
+
+    fig = go.Figure()
+
+    # Bar = Price Range (min → max)
+    fig.add_trace(go.Bar(
+        x=price_range_df["model"],
+        y=price_range_df["max_price_lakh"] - price_range_df["min_price_lakh"],
+        base=price_range_df["min_price_lakh"],
+        name="Price Range",
+        marker_color="lightblue",
+        opacity=0.4,
+        hoverinfo="skip"   # 🚀 skip hover for bars so scatter hover is not blocked
+    ))
+
+    # Scatter = Individual Variants
+    fig.add_trace(go.Scatter(
+        x=df_filtered["model"],
+        y=df_filtered["price_lakhs"],
+        mode="markers+text",
+        name="Variants",
+        text=df_filtered["variant"] + "\n₹" + df_filtered["price_lakhs"].round(2).astype(str) + " L",
+        textposition="middle right",
+        hovertemplate="<b>%{text}</b><br>Model: %{x}<br>Price: ₹%{y} L<extra></extra>",
+        marker=dict(
+            color="darkblue",
+            size=9,
+            line=dict(width=1, color="white")
+        ),
+        cliponaxis=False  # ✅ Prevents text from being cut off
+    ))
 # ---------------------
 # Scatter Plot
 # ---------------------
-if chart_type == "Scatter Plot":
+elif chart_type == "Scatter Plot":
     fig = px.scatter(
         df_filtered,
         x="model",
@@ -788,20 +830,32 @@ elif chart_type == "Treemap":
         uniformtext=dict(minsize=12, mode="show")
     )
 
-# ---------------------
-# Final Layout
-# ---------------------
+# Layout
 fig.update_layout(
-    xaxis_title="Model",
-    yaxis_title="Price (₹ Lakhs)",
-    yaxis=dict(tickformat=".2f"),
-    hovermode="x unified",
-    legend_title="Brand/Fuel",
+    title="Car Model Price Ranges and Variant Prices (in Lakhs)",
+    xaxis=dict(
+        title="Model",
+        tickangle=-45,
+        automargin=True,
+        rangeslider=dict(visible=False),  # enable slider if needed
+        fixedrange=False                  # allow zoom/pan
+    ),
+    yaxis=dict(
+        title="Price (₹ Lakhs)",
+        automargin=True,
+        fixedrange=False                  # allow zoom/pan
+    ),
+    hovermode="closest",
     plot_bgcolor=plot_bgcolor,
     paper_bgcolor=plot_bgcolor,
     font=dict(color=font_color)
 )
+
+
 st.plotly_chart(fig, use_container_width=True)
+
+
+
 
 
 # Price Table
