@@ -9,12 +9,10 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 import re
 import plotly.graph_objects as go
-import pandas as pd
 import plotly.express as px
 import sqlite3
 import textwrap
 import pandas as pd
-import plotly.express as px
 from datetime import date
 # =====================
 # CONFIG
