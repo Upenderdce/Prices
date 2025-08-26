@@ -11,7 +11,11 @@ import re
 import plotly.graph_objects as go
 import pandas as pd
 import plotly.express as px
+import sqlite3
 import textwrap
+import pandas as pd
+import plotly.express as px
+from datetime import date
 # =====================
 # CONFIG
 # =====================
@@ -929,11 +933,6 @@ df_table = df_filtered.sort_values(["brand", "model", "price_lakhs"])[
 df_table["Price (₹ Lakhs)"] = df_table["Price (₹ Lakhs)"].map(lambda x: f"{x:.2f}")
 st.dataframe(df_table, use_container_width=True)
 
-import sqlite3
-import pandas as pd
-import plotly.express as px
-import streamlit as st
-from datetime import date
 
 def load_price_history():
     conn = sqlite3.connect(DB_FILE)
