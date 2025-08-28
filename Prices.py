@@ -487,7 +487,8 @@ def init_db():
             fuel TEXT,
             transmission TEXT,
             variant TEXT,
-            price INTEGER
+            price INTEGER,
+            source TEXT DEFAULT 'scraped'
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON prices(timestamp)")
@@ -512,13 +513,17 @@ def store_prices(prices):
 def get_latest_prices():
     conn = sqlite3.connect(DB_FILE)
     q = """
-        SELECT brand, model, fuel, transmission, variant, price
+        SELECT brand, model, fuel, transmission, variant, price, source, timestamp
         FROM prices
-        WHERE timestamp = (SELECT MAX(timestamp) FROM prices)
+        WHERE source='manual'
+        OR timestamp = (
+            SELECT MAX(timestamp) FROM prices WHERE source='scraped'
+        )
     """
     df = pd.read_sql_query(q, conn)
     conn.close()
     return df
+
 
 # =====================
 # MASTER SCRAPER (button triggers calls)
@@ -536,6 +541,23 @@ def scrape_all_brands_parallel():
 
     all_prices = (maruti or []) + (tata or []) + (hyundai or [])+ (mahindra or [])
     return all_prices
+
+def add_price(brand, model, variant, price, fuel, transmission):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO prices (brand, model, variant, price, fuel, transmission, timestamp, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'manual')
+    """, (brand, model, variant, price, fuel, transmission, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+def delete_price(record_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM prices WHERE id = ? AND source='manual'", (record_id,))
+    conn.commit()
+    conn.close()
 
 # =====================
 # STREAMLIT APP
@@ -696,6 +718,58 @@ trans_available = sorted(df[
 selected_trans = st.sidebar.multiselect(
     "Transmission(s)", options=trans_available, default=trans_available
 )
+
+st.sidebar.subheader("➕ Add Variant Price")
+
+with st.sidebar.form("price_entry_form", clear_on_submit=True):
+    brand_in = st.text_input("Brand")
+    model_in = st.text_input("Model")
+    variant_in = st.text_input("Variant")
+    fuel_in = st.text_input("Fuel", value="Petrol")
+    trans_in = st.text_input("Transmission", value="MT")
+    price_in = st.number_input("Price (₹)", min_value=0.0, step=10000.0, format="%.2f")
+
+    submitted = st.form_submit_button("Add Price")
+    if submitted and brand_in and model_in and variant_in and price_in > 0:
+        add_price(brand_in, model_in, variant_in, price_in, fuel_in, trans_in)
+        st.success(f"✅ Added {brand_in} {model_in} {variant_in} {fuel_in} {trans_in} at ₹{price_in:,.0f}")
+        st.rerun()
+
+
+st.subheader("🗑️ Delete a Manual Entry")
+
+conn = sqlite3.connect(DB_FILE)
+df_manual = pd.read_sql(
+    "SELECT * FROM prices WHERE source='manual' ORDER BY timestamp DESC", conn
+)
+conn.close()
+
+if df_manual.empty:
+    st.info("No manual entries available to delete.")
+else:
+    # Clean label with all details
+    df_manual["label"] = (
+        df_manual["brand"] + " | " +
+        df_manual["model"] + " | " +
+        df_manual["variant"] + " | " +
+        df_manual["fuel"] + " | " +
+        df_manual["transmission"] + " | ₹" +
+        df_manual["price"].astype(str)
+    )
+
+    # Dropdown with proper labels
+    record_choice = st.selectbox(
+        "Select entry to delete",
+        df_manual[["id", "label"]].itertuples(index=False),
+        format_func=lambda x: x.label
+    )
+
+    if st.button("Delete Selected Entry"):
+        delete_price(record_choice.id)   # ✅ deletes only manual
+        st.success("✅ Manual entry deleted.")
+        st.rerun()
+
+
 
 # Price slider filter
 min_price = int(df["price_lakhs"].min())
@@ -862,8 +936,11 @@ elif chart_type == "Line Chart":
 # ---------------------
 elif chart_type == "Treemap":
     # Wrap variant labels manually (max 12 chars per line for readability)
-    df_filtered["variant_wrapped"] = df_filtered["variant"].apply(
-        lambda x: "<br>".join(textwrap.wrap(x, width=12))
+    df_filtered["variant_treemap_label"] = df_filtered.apply(
+        lambda r: "<br>".join(textwrap.wrap(
+            f"{r['variant']} {'CNG' if r['fuel'] == 'CNG' else ''}", width=12
+        )),
+        axis=1
     )
 
     # Sort by model, then by price ascending (lowest first)
@@ -871,8 +948,8 @@ elif chart_type == "Treemap":
 
     # Treemap chart
     fig = px.treemap(
-        df_sorted,
-        path=["brand", "model", "variant_wrapped"],
+        df_filtered.sort_values(["model", "price_lakhs"]),
+        path=["brand", "model", "variant_treemap_label"],
         values="price_lakhs",
         color="price_lakhs",
         color_continuous_scale="Blues" if light_mode else "Viridis",
@@ -887,16 +964,10 @@ elif chart_type == "Treemap":
 
     # Show wrapped label + price
     fig.update_traces(
-        textinfo="label+value",
-        textfont=dict(
-            size=14,
-            family="Arial",
-            color="black" if light_mode else "white"
-        ),
+        textfont=dict(size=14, family="Arial", color="black" if light_mode else "white"),
         texttemplate="%{label}<br>₹%{value:.2f} L",
-        sort=False  # prevent Plotly from re-sorting
+        sort=False
     )
-
 
 # Layout
 fig.update_layout(
@@ -945,47 +1016,71 @@ df = load_price_history()
 if df.empty:
     st.warning("No price history found in the database.")
 else:
-    # Convert timestamp to datetime
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df["date"] = df["timestamp"].dt.date   # Keep only date (day-wise)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    # 👉 Add this line to convert price into lakhs
+    df["price_lakhs"] = df["price"] / 100000
 
-    # Filters
+    df["date"] = df["timestamp"].dt.date
+
+    # Sidebar filters
     brand = st.selectbox("Select Brand", sorted(df["brand"].unique()))
-    model = st.selectbox("Select Model", sorted(df[df["brand"] == brand]["model"].unique()))
-    variant = st.selectbox("Select Variant", sorted(df[(df["brand"] == brand) & (df["model"] == model)]["variant"].unique()))
+    models = st.multiselect(
+        "Select Models",
+        sorted(df[df["brand"] == brand]["model"].unique()),
+        default=df[df["brand"] == brand]["model"].unique()
+    )
+    variants = st.multiselect(
+        "Select Variants",
+        sorted(df[(df["brand"] == brand) & (df["model"].isin(models))]["variant"].unique()),
+        default=df[(df["brand"] == brand) & (df["model"].isin(models))]["variant"].unique()
+    )
 
-    # Filtered data
-    # Filtered data
-    df_filtered = df[(df["brand"] == brand) & (df["model"] == model) & (df["variant"] == variant)].copy()
+    # Filter dataframe
+    df_filtered = df[
+        (df["brand"] == brand) &
+        (df["model"].isin(models)) &
+        (df["variant"].isin(variants))
+    ].copy()
 
     if df_filtered.empty:
         st.warning("No data for selected combination.")
     else:
-        # Ensure 'date' exists
-        df_filtered["date"] = pd.to_datetime(df_filtered["timestamp"]).dt.date
+        # Aggregate by date and variant
+        df_daywise = (
+            df_filtered.groupby(["model", "variant", "date"])
+            .agg({"price": "last"})
+            .reset_index()
+        )
 
-        # --- Aggregate by date (last price of each day) ---
-        df_daywise = df_filtered.groupby("date").agg({"price": "last"}).reset_index()
-
-        # --- Fill forward till today ---
+        # Fill missing dates for each model+variant
         all_days = pd.date_range(start=df_daywise["date"].min(), end=date.today(), freq="D")
-        df_daywise = df_daywise.set_index("date").reindex(all_days).rename_axis("date").reset_index()
+        filled_list = []
+        for (mdl, var) in df_daywise[["model", "variant"]].drop_duplicates().itertuples(index=False):
+            temp = (
+                df_daywise[(df_daywise["model"] == mdl) & (df_daywise["variant"] == var)]
+                .set_index("date")
+                .reindex(all_days)
+                .rename_axis("date")
+                .reset_index()
+            )
+            temp["model"] = mdl
+            temp["variant"] = var
+            temp["price"] = temp["price"].ffill()
+            filled_list.append(temp)
 
-        # Forward-fill missing prices with last known price
-        df_daywise["price"] = df_daywise["price"].ffill()
+        df_daywise = pd.concat(filled_list, ignore_index=True)
+        df_daywise["price_lakhs"] = (df_daywise["price"] / 100000).round(2)
 
-        # --- Convert to Lakhs with 2 decimals ---
-        df_daywise["price_lacs"] = (df_daywise["price"] / 100000).round(2)
+        # Create a unique label for color separation
+        df_daywise["label"] = df_daywise["model"] + " - " + df_daywise["variant"]
 
-        # --- Price change rows only ---
-        df_changes = df_daywise[df_daywise["price_lacs"].shift() != df_daywise["price_lacs"]]
-
-        # Plot chart
+        # Plot interactive chart
         fig = px.line(
             df_daywise,
             x="date",
-            y="price_lacs",
-            title=f"Price Trend: {brand} {model} - {variant}",
+            y="price_lakhs",
+            color="label",
+            title=f"Price Trend: {brand}",
             markers=True
         )
         fig.update_layout(
@@ -994,11 +1089,20 @@ else:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Show price change history
-        st.subheader("📜 Price Change History")
-        st.dataframe(
-            df_changes[["date", "price_lacs"]]
-            .sort_values("date", ascending=False)
-            .rename(columns={"price_lacs": "Price (₹ Lakhs)"}),
-            use_container_width=True
-        )
+        # Show full price history in wide format
+        st.subheader("📜 Price History")
+
+        df_wide = df_daywise.pivot_table(
+            index=["model", "variant"],  # Keep one row per model+variant
+            columns="date",  # Dates become columns
+            values="price_lakhs",  # Show price in lakhs
+            aggfunc="last"  # Last price of the day
+        ).reset_index()
+
+        # Optional: add brand if needed
+        df_wide.insert(0, "brand", brand)
+
+        # Format column names for display
+        df_wide.columns = [str(c) for c in df_wide.columns]
+
+        st.dataframe(df_wide, use_container_width=True)
