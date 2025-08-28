@@ -1053,26 +1053,30 @@ else:
         )
 
         # Fill missing dates for each model+variant
-        all_days = pd.date_range(start=df_daywise["date"].min(), end=date.today(), freq="D")
-        filled_list = []
-        for (mdl, var) in df_daywise[["model", "variant"]].drop_duplicates().itertuples(index=False):
-            temp = (
-                df_daywise[(df_daywise["model"] == mdl) & (df_daywise["variant"] == var)]
-                .set_index("date")
-                .reindex(all_days)
-                .rename_axis("date")
-                .reset_index()
-            )
-            temp["model"] = mdl
-            temp["variant"] = var
-            temp["price"] = temp["price"].ffill()
-            filled_list.append(temp)
+        # Ensure there is at least one valid date
+        if pd.isna(df_daywise["date"].min()):
+            st.warning("No valid date found for the selected data.")
+        else:
+            all_days = pd.date_range(start=df_daywise["date"].min(), end=date.today(), freq="D")
+            filled_list = []
+            for (mdl, var) in df_daywise[["model", "variant"]].drop_duplicates().itertuples(index=False):
+                temp = (
+                    df_daywise[(df_daywise["model"] == mdl) & (df_daywise["variant"] == var)]
+                    .set_index("date")
+                    .reindex(all_days)
+                    .rename_axis("date")
+                    .reset_index()
+                )
+                temp["model"] = mdl
+                temp["variant"] = var
+                temp["price"] = temp["price"].ffill()
+                filled_list.append(temp)
 
-        df_daywise = pd.concat(filled_list, ignore_index=True)
-        df_daywise["price_lakhs"] = (df_daywise["price"] / 100000).round(2)
+            df_daywise = pd.concat(filled_list, ignore_index=True)
+            df_daywise["price_lakhs"] = (df_daywise["price"] / 100000).round(2)
 
-        # Create a unique label for color separation
-        df_daywise["label"] = df_daywise["model"] + " - " + df_daywise["variant"]
+            # Create a unique label for color separation
+            df_daywise["label"] = df_daywise["model"] + " - " + df_daywise["variant"]
 
         # Plot interactive chart
         fig = px.line(
