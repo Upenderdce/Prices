@@ -473,8 +473,8 @@ def fetch_mahindra_prices_parallel():
 # DB HELPERS
 # =====================
 def init_db():
-    connection = sqlite3.connect(DB_FILE)
-    connection.execute("""
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS prices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
@@ -487,9 +487,9 @@ def init_db():
             source TEXT DEFAULT 'scraped'
         )
     """)
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON prices(timestamp)")
-    connection.commit()
-    connection.close()
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON prices(timestamp)")
+    conn.commit()
+    conn.close()
 
 def store_prices(prices):
     if not prices:
