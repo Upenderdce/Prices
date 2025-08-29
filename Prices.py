@@ -14,15 +14,41 @@ import sqlite3
 import textwrap
 import pandas as pd
 from datetime import date
+import streamlit_sortables as sortables
 # =====================
 # CONFIG
 # =====================
-DB_FILE = "prices.db"
-
-
+DB_FILE = "Old/prices.db"
 CITY_CODE = "08"  # Maruti city code: 08 = Delhi
 ARENA_CHANNELS = "NRM,NRC"
 NEXA_CHANNEL = "EXC"
+
+# =====================
+# SESSION + HELPERS
+# =====================
+session = requests.Session()
+retry_strategy = Retry(total=3, status_forcelist=[429, 500, 502, 503, 504], backoff_factor=1)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+
+def _parse_price_rupees(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return int(round(v))
+    s = str(v).strip().replace(",", "").replace(" ", "").replace("₹", "")
+    if not s:
+        return None
+    s = re.sub(r"(?i)Lakhs?|L$", "L", s)
+    try:
+        if s.lower().endswith("l"):
+            return int(float(s[:-1]) * 100000)
+        if s.lower().endswith("cr"):
+            return int(float(s[:-2]) * 10000000)
+        return int(float(s))
+    except:
+        return None
 
 
 # =====================
@@ -157,88 +183,6 @@ def fetch_tata_prices_parallel():
                 rows.extend(r)
     return rows
 
-
-
-# ---------- HYUNDAI ----------
-HYUNDAI_BASE_URL = "https://api.hyundai.co.in/service/price/getPriceByModelAndCity"
-HYUNDAI_HEADERS = {
-    "accept": "application/json, text/javascript, */*; q=0.01",
-    "accept-language": "en-US,en;q=0.9,hi-IN;q=0.8,hi;q=0.7",
-    "origin": "https://www.hyundai.com",
-    "priority": "u=1, i",
-    "referer": "https://www.hyundai.com/",
-    "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"macOS"',
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "cross-site",
-    "user-agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
-}
-# Delhi cityId=1370 (you can add more cities later)
-HYUNDAI_MODELS = [
-    {"cityId": 1370, "modelId": 24, "modelName": "Grand i10 NIOS"},
-    {"cityId": 1370, "modelId": 39, "modelName": "i20"},
-    {"cityId": 1370, "modelId": 41, "modelName": "i20 N Line"},
-    {"cityId": 1370, "modelId": 35, "modelName": "AURA"},
-    {"cityId": 1370, "modelId": 45, "modelName": "Verna"},
-    {"cityId": 1370, "modelId": 18, "modelName": "Venue"},
-    {"cityId": 1370, "modelId": 37, "modelName": "Creta"},
-    {"cityId": 1370, "modelId": 40, "modelName": "Alcazar"},
-    {"cityId": 1370, "modelId": 46, "modelName": "EXTER"},
-    {"cityId": 1370, "modelId": 42, "modelName": "Tucson"},
-    {"cityId": 1370, "modelId": 43, "modelName": "Venue N Line"},
-    {"cityId": 1370, "modelId": 47, "modelName": "Creta N Line"},
-    {"cityId": 1370, "modelId": 48, "modelName": "Creta Electric"},
-]
-
-
-MAHINDRA_MODELS = [
-    {"name": "Thar ROXX", "pid": "TH5D", "colorCode": "A3DPFRSMBK"},
-    {"name": "XUV 3XO", "pid": "X3XO", "colorCode": "A3CTNYLOBK"},
-    {"name": "Thar ROXX", "pid": "TH5D", "colorCode": "A3DPFRSMBK"},
-    {"name": "XUV 3XO", "pid": "X3XO", "colorCode": "A3CTNYLOBK"},
-    {"name": "XUV700", "pid": "X700M063917795233", "colorCode": "A3XXXXX"},  # Replace with actual
-    {"name": "SCORPIO-N", "pid": "SCN", "colorCode": "A3XXXXX"},
-    {"name": "SCORPIO CLASSIC", "pid": "SCRC", "colorCode": "A3XXXXX"},
-    {"name": "BOLERO NEO", "pid": "NEO", "colorCode": "A3XXXXX"},
-    {"name": "BOLERO", "pid": "BOL", "colorCode": "A3XXXXX"},
-    {"name": "XUV400", "pid": "X400", "colorCode": "A3XXXXX"},
-    {"name": "MARAZZO", "pid": "MRZO", "colorCode": "A3XXXXX"},
-    {"name": "VEERO", "pid": "VEERO", "colorCode": "A3XXXXX"},
-    # Add other models with actual color codes here
-]
-
-MAHINDRA_BASE_URL = "https://auto.mahindra.com/on/demandware.store/Sites-amc-Site/en_IN/Product-Variation"
-
-# =====================
-# SESSION + HELPERS
-# =====================
-session = requests.Session()
-retry_strategy = Retry(total=3, status_forcelist=[429, 500, 502, 503, 504], backoff_factor=1)
-adapter = HTTPAdapter(max_retries=retry_strategy)
-session.mount("https://", adapter)
-session.mount("http://", adapter)
-
-def _parse_price_rupees(v):
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return int(round(v))
-    s = str(v).strip().replace(",", "").replace(" ", "").replace("₹", "")
-    if not s:
-        return None
-    s = re.sub(r"(?i)Lakhs?|L$", "L", s)
-    try:
-        if s.lower().endswith("l"):
-            return int(float(s[:-1]) * 100000)
-        if s.lower().endswith("cr"):
-            return int(float(s[:-2]) * 10000000)
-        return int(float(s))
-    except:
-        return None
-
 # =====================
 # MARUTI SCRAPER (parallel by model)
 # =====================
@@ -354,6 +298,40 @@ def fetch_maruti_prices_parallel():
 # =====================
 # HYUNDAI SCRAPER (parallel by model)
 # =====================
+
+# ---------- HYUNDAI ----------
+HYUNDAI_BASE_URL = "https://api.hyundai.co.in/service/price/getPriceByModelAndCity"
+HYUNDAI_HEADERS = {
+    "accept": "application/json, text/javascript, */*; q=0.01",
+    "accept-language": "en-US,en;q=0.9,hi-IN;q=0.8,hi;q=0.7",
+    "origin": "https://www.hyundai.com",
+    "priority": "u=1, i",
+    "referer": "https://www.hyundai.com/",
+    "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "cross-site",
+    "user-agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
+}
+# Delhi cityId=1370 (you can add more cities later)
+HYUNDAI_MODELS = [
+    {"cityId": 1370, "modelId": 24, "modelName": "Grand i10 NIOS"},
+    {"cityId": 1370, "modelId": 39, "modelName": "i20"},
+    {"cityId": 1370, "modelId": 41, "modelName": "i20 N Line"},
+    {"cityId": 1370, "modelId": 35, "modelName": "AURA"},
+    {"cityId": 1370, "modelId": 45, "modelName": "Verna"},
+    {"cityId": 1370, "modelId": 18, "modelName": "Venue"},
+    {"cityId": 1370, "modelId": 37, "modelName": "Creta"},
+    {"cityId": 1370, "modelId": 40, "modelName": "Alcazar"},
+    {"cityId": 1370, "modelId": 46, "modelName": "EXTER"},
+    {"cityId": 1370, "modelId": 42, "modelName": "Tucson"},
+    {"cityId": 1370, "modelId": 43, "modelName": "Venue N Line"},
+    {"cityId": 1370, "modelId": 47, "modelName": "Creta N Line"},
+    {"cityId": 1370, "modelId": 48, "modelName": "Creta Electric"},
+]
 def _hyundai_fetch_one(model):
     params = {
         "cityId": model["cityId"],
@@ -423,6 +401,24 @@ def fetch_hyundai_prices_parallel():
 # =====================
 # MAHINDRA SCRAPER
 # =====================
+MAHINDRA_MODELS = [
+    {"name": "Thar ROXX", "pid": "TH5D", "colorCode": "A3DPFRSMBK"},
+    {"name": "XUV 3XO", "pid": "X3XO", "colorCode": "A3CTNYLOBK"},
+    {"name": "Thar ROXX", "pid": "TH5D", "colorCode": "A3DPFRSMBK"},
+    {"name": "XUV 3XO", "pid": "X3XO", "colorCode": "A3CTNYLOBK"},
+    {"name": "XUV700", "pid": "X700M063917795233", "colorCode": "A3XXXXX"},  # Replace with actual
+    {"name": "SCORPIO-N", "pid": "SCN", "colorCode": "A3XXXXX"},
+    {"name": "SCORPIO CLASSIC", "pid": "SCRC", "colorCode": "A3XXXXX"},
+    {"name": "BOLERO NEO", "pid": "NEO", "colorCode": "A3XXXXX"},
+    {"name": "BOLERO", "pid": "BOL", "colorCode": "A3XXXXX"},
+    {"name": "XUV400", "pid": "X400", "colorCode": "A3XXXXX"},
+    {"name": "MARAZZO", "pid": "MRZO", "colorCode": "A3XXXXX"},
+    {"name": "VEERO", "pid": "VEERO", "colorCode": "A3XXXXX"},
+    # Add other models with actual color codes here
+]
+
+MAHINDRA_BASE_URL = "https://auto.mahindra.com/on/demandware.store/Sites-amc-Site/en_IN/Product-Variation"
+
 def _mahindra_fetch_one(model):
     color_param_name = f"dwvar_{model['pid']}_colorCode"
     params = {
@@ -477,8 +473,8 @@ def fetch_mahindra_prices_parallel():
 # DB HELPERS
 # =====================
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("""
+    connection = sqlite3.connect(DB_FILE)
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS prices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
@@ -491,9 +487,9 @@ def init_db():
             source TEXT DEFAULT 'scraped'
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON prices(timestamp)")
-    conn.commit()
-    conn.close()
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON prices(timestamp)")
+    connection.commit()
+    connection.close()
 
 def store_prices(prices):
     if not prices:
@@ -560,112 +556,45 @@ def delete_price(record_id):
     conn.close()
 
 # =====================
-# STREAMLIT APP
-# =====================
-st.set_page_config(page_title="Car Price Dashboard", layout="wide")
-
-
-# =====================
 # THEME TOGGLE
 # =====================
+
 def apply_theme(light_mode: bool):
     if light_mode:
         custom_css = """
         <style>
-        /* App background and text */
         .stApp { background-color: #FFFFFF; color: #000000; }
-
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background-color: #F5F5F5;
-            color: #000000;
-        }
-
-        /* Multiselect tags */
-        .stMultiSelect div[data-baseweb="tag"] {
-            background-color: #e0e0e0;
-            color: #000000;
-        }
-
-        /* Buttons */
-        .stButton>button {
-            background-color: #f0f0f0;
-            color: #000000;
-            border-radius: 8px;
-        }
-
-        /* Plotly chart background */
-        .js-plotly-plot .plotly {
-            background-color: #FFFFFF !important;
-        }
+        section[data-testid="stSidebar"] { background-color: #F5F5F5; color: #000000; }
+        .stMultiSelect div[data-baseweb="tag"] { background-color: #e0e0e0; color: #000000; }
+        .stButton>button { background-color: #f0f0f0; color: #000000; border-radius: 8px; }
+        .js-plotly-plot .plotly { background-color: #FFFFFF !important; }
         </style>
         """
+        return custom_css, "#FFFFFF", "black"
     else:
         custom_css = """
         <style>
-        /* App background and text */
         .stApp { background-color: #181818; color: #FFFFFF; }
-
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background-color: #262626;
-            color: #FFFFFF;
-        }
-
-        /* Multiselect tags */
-        .stMultiSelect div[data-baseweb="tag"] {
-            background-color: #444444;
-            color: #FFFFFF;
-        }
-
-        /* Buttons */
-        .stButton>button {
-            background-color: #333333;
-            color: #FFFFFF;
-            border-radius: 8px;
-        }
-
-        /* Plotly chart background */
-        .js-plotly-plot .plotly {
-            background-color: #181818 !important;
-        }
+        section[data-testid="stSidebar"] { background-color: #262626; color: #FFFFFF; }
+        .stMultiSelect div[data-baseweb="tag"] { background-color: #444444; color: #FFFFFF; }
+        .stButton>button { background-color: #333333; color: #FFFFFF; border-radius: 8px; }
+        .js-plotly-plot .plotly { background-color: #181818 !important; }
         </style>
         """
+        return custom_css, "#000000", "white"
 
-    st.markdown(custom_css, unsafe_allow_html=True)
+# 🔘 Toggle (default = light mode False → dark theme)
+light_mode = st.toggle("🌞 Light Mode", value=False)
 
-light_mode = st.toggle("🌙 Light Mode", value=False)  # default = dark
-
-if light_mode:
-    # Light mode CSS
-    custom_css = """
-    <style>
-    .stApp { background-color: #FFFFFF; color: #000000; }
-    div, span, p, h1, h2, h3, h4, h5, h6 { color: #000000 !important; }
-    .dataframe, .stDataFrame { background-color: #FFFFFF !important; color: #000000 !important; }
-    </style>
-    """
-    plot_bgcolor = "#FFFFFF"
-    font_color = "black"
-else:
-    # Dark mode CSS
-    custom_css = """
-    <style>
-    .stApp { background-color: #000000; color: #FFFFFF; }
-    div, span, p, h1, h2, h3, h4, h5, h6 { color: #FFFFFF !important; }
-    .dataframe, .stDataFrame { background-color: #000000 !important; color: #FFFFFF !important; }
-    </style>
-    """
-    plot_bgcolor = "#000000"
-    font_color = "white"
-
-# Apply custom CSS
+# 🎨 Apply theme
+custom_css, plot_bgcolor, font_color = apply_theme(light_mode)
 st.markdown(custom_css, unsafe_allow_html=True)
 
-
+# =====================
+# STREAMLIT APP
+# =====================
+st.set_page_config(page_title="Car Price Dashboard", layout="wide")
 st.title("🚗 Car Price Dashboard")
-
-
 init_db()
 
 if st.button("🔄 Fetch Latest Prices"):
@@ -697,7 +626,6 @@ selected_brands = st.sidebar.multiselect(
     "Brand(s)", options=brands_available, default=[]
 )
 
-# Model filter depends on selected brands
 models_available = sorted(df[df["brand"].isin(selected_brands)]["model"].unique())
 selected_models = st.sidebar.multiselect(
     "Model(s)", options=models_available, default=models_available
@@ -721,20 +649,23 @@ selected_trans = st.sidebar.multiselect(
 
 st.sidebar.subheader("➕ Add Variant Price")
 
+# Sidebar manual entry form
 with st.sidebar.form("price_entry_form", clear_on_submit=True):
-    brand_in = st.text_input("Brand")
+    brand_in = st.text_input("Brand", value="Maruti")
     model_in = st.text_input("Model")
     variant_in = st.text_input("Variant")
     fuel_in = st.text_input("Fuel", value="Petrol")
-    trans_in = st.text_input("Transmission", value="MT")
-    price_in = st.number_input("Price (₹)", min_value=0.0, step=10000.0, format="%.2f")
+    trans_in = st.text_input("Transmission", value="Manual")
+
+    # 👇 Input price in Lakhs, store in rupees
+    price_lakh_in = st.number_input("Price (₹ Lakhs)", min_value=0.0, step=0.1, format="%.2f")
 
     submitted = st.form_submit_button("Add Price")
-    if submitted and brand_in and model_in and variant_in and price_in > 0:
-        add_price(brand_in, model_in, variant_in, price_in, fuel_in, trans_in)
-        st.success(f"✅ Added {brand_in} {model_in} {variant_in} {fuel_in} {trans_in} at ₹{price_in:,.0f}")
+    if submitted and brand_in and model_in and variant_in and price_lakh_in > 0:
+        price_rupees = int(price_lakh_in * 100000)  # convert lakhs → rupees
+        add_price(brand_in, model_in, variant_in, price_rupees, fuel_in, trans_in)
+        st.success(f"✅ Added {brand_in} {model_in} {variant_in} {fuel_in} {trans_in} at ₹{price_rupees:,.0f}")
         st.rerun()
-
 
 st.subheader("🗑️ Delete a Manual Entry")
 
@@ -808,7 +739,7 @@ selected_variants = st.multiselect(
 
 # Only selected variants get a label
 df_filtered["label"] = df_filtered.apply(
-    lambda r: f"{r['variant']} {'CNG' if r['fuel'] == 'CNG' else ''} ({r['price_lakhs']:.2f}L)"
+    lambda r: f"{r['variant']} {'CNG' if 'cng' in str(r['fuel']).lower() else ''} ({r['price_lakhs']:.2f}L)"
     if r["variant"] in selected_variants else "",
     axis=1
 )
@@ -823,20 +754,78 @@ chart_type = st.radio(
     horizontal=True
 )
 
+
+# ---- Default order (by min price) ----
 model_order = (
-    df_filtered.groupby("model")["price_lakhs"]
+    df_filtered.groupby("model", observed=True)["price_lakhs"]
     .min()
     .sort_values()
     .index
     .tolist()
 )
 
+st.sidebar.subheader("📋 Arrange Models")
+st.markdown("""
+    <style>
+    .sortable-item {
+        padding: 4px 8px !important;
+        margin: 2px 0 !important;
+        font-size: 0.85rem !important;
+    }
+    .sortable-container {
+        padding: 2px !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+# Drag-and-drop list
 
+with st.sidebar.expander("📋 Arrange Models", expanded=True):
+    current_models = model_order  # always from latest filter
 
+    # Ensure session_state has the right models
+    if "final_order" not in st.session_state:
+        st.session_state.final_order = current_models
+    else:
+        # Add missing models
+        for m in current_models:
+            if m not in st.session_state.final_order:
+                st.session_state.final_order.append(m)
+        # Remove ones not in current selection
+        st.session_state.final_order = [
+            m for m in st.session_state.final_order if m in current_models
+        ]
+
+    # --- Pass current models in the latest order ---
+    ordered_models = [m for m in st.session_state.final_order if m in current_models]
+    custom_order = sortables.sort_items(
+        items=ordered_models,
+        key=f"sortable_models_{len(ordered_models)}"
+    )
+
+    # Handle None or []
+    if not custom_order:
+        custom_order = ordered_models
+
+    # Update if changed
+    if custom_order != st.session_state.final_order:
+        st.session_state.final_order = custom_order
+
+    order_to_use = st.session_state.final_order
+
+st.sidebar.write("👉 Final Order:", order_to_use)
+
+# ---- Filter data only to selected models ----
+df_filtered["model"] = pd.Categorical(
+            df_filtered["model"], categories=order_to_use, ordered=True
+        )
+df_filtered = df_filtered.sort_values(["model", "timestamp"])
+
+# ---------------------
+# Price Range Chart
+# ---------------------
 if chart_type == "Price Range Chart":
-    # Build price_range_df for min/max
     price_range_df = (
-        df_filtered.groupby("model")
+        df_filtered.groupby("model", observed=True)
         .agg(min_price_lakh=("price_lakhs", "min"),
              max_price_lakh=("price_lakhs", "max"))
         .reset_index()
@@ -844,18 +833,23 @@ if chart_type == "Price Range Chart":
 
     fig = go.Figure()
 
-    # Bar = Price Range (min → max)
+    # Apply custom order
+    price_range_df["model"] = pd.Categorical(price_range_df["model"], categories=order_to_use, ordered=True)
+    price_range_df = price_range_df.sort_values("model")
+
+    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+    df_filtered = df_filtered.sort_values("model")
+
     fig.add_trace(go.Bar(
         x=price_range_df["model"],
         y=price_range_df["max_price_lakh"] - price_range_df["min_price_lakh"],
         base=price_range_df["min_price_lakh"],
         name="Price Range",
-        marker_color="lightblue",
+        marker=dict(color="lightblue"),
         opacity=0.4,
-        hoverinfo="skip"   # 🚀 skip hover for bars so scatter hover is not blocked
+        hoverinfo="skip"
     ))
 
-    # Scatter = Individual Variants
     fig.add_trace(go.Scatter(
         x=df_filtered["model"],
         y=df_filtered["price_lakhs"],
@@ -864,17 +858,16 @@ if chart_type == "Price Range Chart":
         text=df_filtered["label"],
         textposition="middle right",
         hovertemplate="<b>%{text}</b><br>Model: %{x}<br>Price: ₹%{y} L<extra></extra>",
-        marker=dict(
-            color="darkblue",
-            size=9,
-            line=dict(width=1, color="white")
-        ),
-        cliponaxis=False  # ✅ Prevents text from being cut off
+        marker=dict(color="dark blue", size=9, line=dict(width=1, color="white")),
+        cliponaxis=False
     ))
+
 # ---------------------
 # Scatter Plot
 # ---------------------
 elif chart_type == "Scatter Plot":
+    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+
     fig = px.scatter(
         df_filtered,
         x="model",
@@ -884,7 +877,7 @@ elif chart_type == "Scatter Plot":
         text="label",
         hover_data=["brand", "variant", "transmission"],
         title="Price of Each Variant by Model & Fuel (₹ Lakhs)",
-        category_orders={"model": model_order},
+        category_orders={"model": order_to_use},
         height=520
     )
     fig.update_traces(textposition="middle center")
@@ -893,6 +886,8 @@ elif chart_type == "Scatter Plot":
 # Violin Plot
 # ---------------------
 elif chart_type == "Violin Plot":
+    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+
     fig = px.violin(
         df_filtered,
         x="brand",
@@ -901,9 +896,9 @@ elif chart_type == "Violin Plot":
         box=True,
         points="all",
         title="Price Distribution by Brand (₹ Lakhs)",
-        category_orders={"model": model_order},
         height=520
     )
+
     scatter = px.scatter(
         df_filtered,
         x="brand",
@@ -914,10 +909,14 @@ elif chart_type == "Violin Plot":
     scatter.update_traces(textposition="top center", showlegend=False)
     for trace in scatter.data:
         fig.add_trace(trace)
+
 # ---------------------
 # Line Chart
 # ---------------------
 elif chart_type == "Line Chart":
+    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+    df_filtered = df_filtered.sort_values("model")
+
     fig = px.line(
         df_filtered.sort_values("price_lakhs"),
         x="model",
@@ -926,7 +925,7 @@ elif chart_type == "Line Chart":
         markers=True,
         text="label",
         title="Price Trends by Model (₹ Lakhs)",
-        category_orders={"model": model_order},
+        category_orders={"model": order_to_use},
         height=520
     )
     fig.update_traces(textposition="top center")
@@ -935,7 +934,9 @@ elif chart_type == "Line Chart":
 # Treemap
 # ---------------------
 elif chart_type == "Treemap":
-    # Wrap variant labels manually (max 12 chars per line for readability)
+    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+    df_filtered = df_filtered.sort_values(["model", "price_lakhs"])
+
     df_filtered["variant_treemap_label"] = df_filtered.apply(
         lambda r: "<br>".join(textwrap.wrap(
             f"{r['variant']} {'CNG' if r['fuel'] == 'CNG' else ''}", width=12
@@ -943,46 +944,40 @@ elif chart_type == "Treemap":
         axis=1
     )
 
-    # Sort by model, then by price ascending (lowest first)
     df_sorted = df_filtered.sort_values(["model", "price_lakhs"], ascending=[True, True])
 
-    # Treemap chart
     fig = px.treemap(
-        df_filtered.sort_values(["model", "price_lakhs"]),
+        df_sorted,
         path=["brand", "model", "variant_treemap_label"],
         values="price_lakhs",
         color="price_lakhs",
         color_continuous_scale="Blues" if light_mode else "Viridis",
         title="Brand → Model → Variant Price Share",
-        hover_data={
-            "brand": True,
-            "model": True,
-            "variant": True,
-            "price_lakhs": ":.2f"
-        }
+        hover_data={"brand": True, "model": True, "variant": True, "price_lakhs": ":.2f"}
     )
 
-    # Show wrapped label + price
     fig.update_traces(
         textfont=dict(size=14, family="Arial", color="black" if light_mode else "white"),
         texttemplate="%{label}<br>₹%{value:.2f} L",
         sort=False
     )
 
+# ---------------------
 # Layout
+# ---------------------
 fig.update_layout(
     title="Car Model Price Ranges and Variant Prices (in Lakhs)",
     xaxis=dict(
         title="Model",
-        tickangle=-0,
+        tickangle=0,
         automargin=True,
-        rangeslider=dict(visible=False),  # enable slider if needed
-        fixedrange=False                  # allow zoom/pan
+        rangeslider=dict(visible=False),
+        fixedrange=False
     ),
     yaxis=dict(
         title="Price (₹ Lakhs)",
         automargin=True,
-        fixedrange=False                  # allow zoom/pan
+        fixedrange=False
     ),
     hovermode="closest",
     plot_bgcolor=plot_bgcolor,
@@ -991,7 +986,6 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
-
 
 
 # Price Table
@@ -1047,7 +1041,7 @@ else:
     else:
         # Aggregate by date and variant
         df_daywise = (
-            df_filtered.groupby(["model", "variant", "date"])
+            df_filtered.groupby(["model", "variant", "date"], observed=True)
             .agg({"price": "last"})
             .reset_index()
         )
