@@ -18,7 +18,7 @@ import streamlit_sortables as sortables
 # =====================
 # CONFIG
 # =====================
-DB_FILE = "Old/prices.db"
+DB_FILE = "prices.db"
 CITY_CODE = "08"  # Maruti city code: 08 = Delhi
 ARENA_CHANNELS = "NRM,NRC"
 NEXA_CHANNEL = "EXC"
@@ -473,8 +473,8 @@ def fetch_mahindra_prices_parallel():
 # DB HELPERS
 # =====================
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("""
+    connection = sqlite3.connect(DB_FILE)
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS prices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
@@ -487,9 +487,9 @@ def init_db():
             source TEXT DEFAULT 'scraped'
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON prices(timestamp)")
-    conn.commit()
-    conn.close()
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON prices(timestamp)")
+    connection.commit()
+    connection.close()
 
 def store_prices(prices):
     if not prices:
