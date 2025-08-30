@@ -51,6 +51,7 @@ def _parse_price_rupees(v):
         return None
 
 
+
 # =====================
 # TATA SCRAPER
 # =====================
@@ -404,8 +405,6 @@ def fetch_hyundai_prices_parallel():
 MAHINDRA_MODELS = [
     {"name": "Thar ROXX", "pid": "TH5D", "colorCode": "A3DPFRSMBK"},
     {"name": "XUV 3XO", "pid": "X3XO", "colorCode": "A3CTNYLOBK"},
-    {"name": "Thar ROXX", "pid": "TH5D", "colorCode": "A3DPFRSMBK"},
-    {"name": "XUV 3XO", "pid": "X3XO", "colorCode": "A3CTNYLOBK"},
     {"name": "XUV700", "pid": "X700M063917795233", "colorCode": "A3XXXXX"},  # Replace with actual
     {"name": "SCORPIO-N", "pid": "SCN", "colorCode": "A3XXXXX"},
     {"name": "SCORPIO CLASSIC", "pid": "SCRC", "colorCode": "A3XXXXX"},
@@ -469,6 +468,93 @@ def fetch_mahindra_prices_parallel():
                 rows.extend(result)
     return rows
 
+
+# =====================
+# TOYOTA SCRAPER
+# =====================
+BASE_URL = "https://webapi.toyotabharat.com/1.0/api/price"
+
+headers = {
+    "accept": "application/xml, text/xml, */*; q=0.01",
+    "origin": "https://www.toyotabharat.com",
+    "referer": "https://www.toyotabharat.com/",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/139.0.0.0 Safari/537.36"
+}
+
+# ----------------------------
+# Function 1: Fetch all models
+# ----------------------------
+def fetch_models():
+    """Fetch all Toyota models (id + name)."""
+    url = f"{BASE_URL}/models"
+    resp = requests.post(url, headers=headers, data="")
+    soup = BeautifulSoup(resp.text, "xml")
+
+    models = []
+    for m in soup.find_all("PriceModel"):
+        models.append({
+            "id": m.find("Id").text.strip(),
+            "name": m.find("Name").text.strip()
+        })
+    return models
+
+# ----------------------------
+# Function 2: Fetch prices for one model
+# ----------------------------
+def _toyota_prices(dealer_id, model_id, model_name):
+    """Fetch price details for a given dealer & model."""
+    url = f"{BASE_URL}/list/{dealer_id}/{model_id}"
+    resp = requests.post(url, headers=headers, data="")
+    soup = BeautifulSoup(resp.text, "xml")
+
+    rows = []
+    for p in soup.find_all("Price"):
+        grade = p.find("PriceGrade")
+
+        if grade:
+            # get the *variant name* only from direct children of <PriceGrade>
+            variant_tag = grade.find("Name", recursive=False)
+            variant = variant_tag.text.strip() if variant_tag else ""
+
+            fuel_tag = grade.find("FuelType", recursive=False)
+            fuel = fuel_tag.text.strip() if fuel_tag else ""
+
+            trans_tag = grade.find("Details", recursive=False)
+            trans = trans_tag.text.strip() if trans_tag else ""
+        else:
+            variant, fuel, trans = "", "", ""
+
+        amount_tag = p.find("Amount")
+        amount = int(amount_tag.text.strip()) if amount_tag and amount_tag.text.strip().isdigit() else None
+
+        rows.append({
+            "Brand": "Toyota",
+            "Model": model_name,
+            "Fuel": fuel,
+            "Transmission": trans,
+            "Variant": variant,
+            "Price": amount
+        })
+    return rows
+
+
+# ----------------------------
+# Combine everything into DataFrame
+# ----------------------------
+def fetch_toyota_prices(dealer_id=704):
+    all_data = []
+    models = fetch_models()
+    for m in models:
+        model_id, model_name = m["id"], m["name"]
+        try:
+            prices = _toyota_prices(dealer_id, model_id, model_name)
+            all_data.extend(prices)
+        except Exception as e:
+            print(f"❌ Failed for {model_name}: {e}")
+    return all_data
+
 # =====================
 # DB HELPERS
 # =====================
@@ -477,7 +563,7 @@ def init_db():
     connection.execute("""
         CREATE TABLE IF NOT EXISTS prices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
             brand TEXT,
             model TEXT,
             fuel TEXT,
@@ -530,21 +616,23 @@ def scrape_all_brands_parallel():
         f_tata = ex.submit(fetch_tata_prices_parallel)
         f_hyundai = ex.submit(fetch_hyundai_prices_parallel)
         f_mahindra = ex.submit(fetch_mahindra_prices_parallel)
+        f_toyota = ex.submit(fetch_toyota_prices)  # pass function, don’t call it
         maruti = f_maruti.result()
         tata = f_tata.result()
         hyundai = f_hyundai.result()
         mahindra = f_mahindra.result()
+        toyota = f_toyota.result()
 
-    all_prices = (maruti or []) + (tata or []) + (hyundai or [])+ (mahindra or [])
+    all_prices = (maruti or []) + (tata or []) + (hyundai or []) + (mahindra or []) + (toyota or [])
     return all_prices
 
-def add_price(brand, model, variant, price, fuel, transmission):
+def add_price(brand, model, variant, price, fuel, transmission,timestamp):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
         INSERT INTO prices (brand, model, variant, price, fuel, transmission, timestamp, source)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'manual')
-    """, (brand, model, variant, price, fuel, transmission, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    """, (brand, model, variant, price, fuel, transmission, timestamp))
     conn.commit()
     conn.close()
 
@@ -647,25 +735,37 @@ selected_trans = st.sidebar.multiselect(
     "Transmission(s)", options=trans_available, default=trans_available
 )
 
-st.sidebar.subheader("➕ Add Variant Price")
+st.subheader("➕ Add Variant Price")
 
-# Sidebar manual entry form
-with st.sidebar.form("price_entry_form", clear_on_submit=True):
-    brand_in = st.text_input("Brand", value="Maruti")
-    model_in = st.text_input("Model")
-    variant_in = st.text_input("Variant")
-    fuel_in = st.text_input("Fuel", value="Petrol")
-    trans_in = st.text_input("Transmission", value="Manual")
+# Place the form in main layout (not sidebar)
+with st.form("price_entry_form", clear_on_submit=True):
+    cols = st.columns(3)  # 👈 use columns for compact layout
 
-    # 👇 Input price in Lakhs, store in rupees
-    price_lakh_in = st.number_input("Price (₹ Lakhs)", min_value=0.0, step=0.1, format="%.2f")
+    with cols[0]:
+        brand_in = st.text_input("Brand", value="Maruti")
+        model_in = st.text_input("Model")
+        variant_in = st.text_input("Variant")
+
+    with cols[1]:
+        fuel_in = st.text_input("Fuel", value="Petrol")
+        trans_in = st.text_input("Transmission", value="Manual")
+
+    with cols[2]:
+        # Input price in Lakhs, store in rupees
+        price_lakh_in = st.number_input("Price (₹ Lakhs)", min_value=0.0, step=1.0, format="%.2f")
 
     submitted = st.form_submit_button("Add Price")
+
     if submitted and brand_in and model_in and variant_in and price_lakh_in > 0:
         price_rupees = int(price_lakh_in * 100000)  # convert lakhs → rupees
-        add_price(brand_in, model_in, variant_in, price_rupees, fuel_in, trans_in)
-        st.success(f"✅ Added {brand_in} {model_in} {variant_in} {fuel_in} {trans_in} at ₹{price_rupees:,.0f}")
+        timestamp = datetime.now().isoformat()
+        add_price(brand_in, model_in, variant_in, price_rupees, fuel_in, trans_in, timestamp)
+        st.success(
+            f"✅ Added {brand_in} {model_in} {variant_in} "
+            f"{fuel_in} {trans_in} at ₹{price_rupees:,.0f}"
+        )
         st.rerun()
+
 
 st.subheader("🗑️ Delete a Manual Entry")
 
@@ -987,7 +1087,6 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-
 # Price Table
 st.subheader("Price Table (sorted by Brand, Model, Price)")
 df_table = df_filtered.sort_values(["brand", "model", "price_lakhs"])[
@@ -1039,19 +1138,20 @@ else:
     if df_filtered.empty:
         st.warning("No data for selected combination.")
     else:
-        # Aggregate by date and variant
         df_daywise = (
             df_filtered.groupby(["model", "variant", "date"], observed=True)
             .agg({"price": "last"})
             .reset_index()
         )
 
-        # Fill missing dates for each model+variant
-        # Ensure there is at least one valid date
-        if pd.isna(df_daywise["date"].min()):
-            st.warning("No valid date found for the selected data.")
+        if df_daywise.empty or df_daywise["date"].isna().all():
+            st.warning("No valid data available for plotting.")
         else:
-            all_days = pd.date_range(start=df_daywise["date"].min(), end=date.today(), freq="D")
+            all_days = pd.date_range(
+                start=df_daywise["date"].min(),
+                end=date.today(),
+                freq="D"
+            )
             filled_list = []
             for (mdl, var) in df_daywise[["model", "variant"]].drop_duplicates().itertuples(index=False):
                 temp = (
@@ -1066,41 +1166,37 @@ else:
                 temp["price"] = temp["price"].ffill()
                 filled_list.append(temp)
 
-            df_daywise = pd.concat(filled_list, ignore_index=True)
-            df_daywise["price_lakhs"] = (df_daywise["price"] / 100000).round(2)
+            if not filled_list:
+                st.warning("No filled data to plot.")
+            else:
+                df_daywise = pd.concat(filled_list, ignore_index=True)
+                df_daywise["price_lakhs"] = (df_daywise["price"] / 100000).round(2)
+                df_daywise["label"] = df_daywise["model"] + " - " + df_daywise["variant"]
 
-            # Create a unique label for color separation
-            df_daywise["label"] = df_daywise["model"] + " - " + df_daywise["variant"]
+                # ✅ Plot only if df_daywise has valid rows
+                if not df_daywise.empty:
+                    fig = px.line(
+                        df_daywise,
+                        x="date",
+                        y="price_lakhs",
+                        color="label",
+                        title=f"Price Trend: {brand}",
+                        markers=True
+                    )
+                    fig.update_layout(
+                        xaxis_title="Date",
+                        yaxis_title="Price (₹ Lakhs)"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
-        # Plot interactive chart
-        fig = px.line(
-            df_daywise,
-            x="date",
-            y="price_lakhs",
-            color="label",
-            title=f"Price Trend: {brand}",
-            markers=True
-        )
-        fig.update_layout(
-            xaxis_title="Date",
-            yaxis_title="Price (₹ Lakhs)"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Show full price history in wide format
-        st.subheader("📜 Price History")
-
-        df_wide = df_daywise.pivot_table(
-            index=["model", "variant"],  # Keep one row per model+variant
-            columns="date",  # Dates become columns
-            values="price_lakhs",  # Show price in lakhs
-            aggfunc="last"  # Last price of the day
-        ).reset_index()
-
-        # Optional: add brand if needed
-        df_wide.insert(0, "brand", brand)
-
-        # Format column names for display
-        df_wide.columns = [str(c) for c in df_wide.columns]
-
-        st.dataframe(df_wide, use_container_width=True)
+                    # Show full price history
+                    st.subheader("📜 Price History")
+                    df_wide = df_daywise.pivot_table(
+                        index=["model", "variant"],
+                        columns="date",
+                        values="price_lakhs",
+                        aggfunc="last"
+                    ).reset_index()
+                    df_wide.insert(0, "brand", brand)
+                    df_wide.columns = [str(c) for c in df_wide.columns]
+                    st.dataframe(df_wide, use_container_width=True)
