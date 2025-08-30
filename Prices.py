@@ -472,9 +472,9 @@ def fetch_mahindra_prices_parallel():
 # =====================
 # TOYOTA SCRAPER
 # =====================
-BASE_URL = "https://webapi.toyotabharat.com/1.0/api/price"
+TOYOTA_BASE_URL = "https://webapi.toyotabharat.com/1.0/api/price"
 
-headers = {
+TOYOTA_HEADERS = {
     "accept": "application/xml, text/xml, */*; q=0.01",
     "origin": "https://www.toyotabharat.com",
     "referer": "https://www.toyotabharat.com/",
@@ -486,10 +486,10 @@ headers = {
 # ----------------------------
 # Function 1: Fetch all models
 # ----------------------------
-def fetch_models():
+def fetch_toyota_models():
     """Fetch all Toyota models (id + name)."""
-    url = f"{BASE_URL}/models"
-    resp = requests.post(url, headers=headers, data="")
+    url = f"{TOYOTA_BASE_URL}/models"
+    resp = requests.post(url, headers=TOYOTA_HEADERS, data="")
     soup = BeautifulSoup(resp.text, "xml")
 
     models = []
@@ -505,8 +505,8 @@ def fetch_models():
 # ----------------------------
 def _toyota_prices(dealer_id, model_id, model_name):
     """Fetch price details for a given dealer & model."""
-    url = f"{BASE_URL}/list/{dealer_id}/{model_id}"
-    resp = requests.post(url, headers=headers, data="")
+    url = f"{TOYOTA_BASE_URL}/list/{dealer_id}/{model_id}"
+    resp = requests.post(url, headers=TOYOTA_HEADERS, data="")
     soup = BeautifulSoup(resp.text, "xml")
 
     rows = []
@@ -545,11 +545,192 @@ def _toyota_prices(dealer_id, model_id, model_name):
 # ----------------------------
 def fetch_toyota_prices(dealer_id=704):
     all_data = []
-    models = fetch_models()
+    models = fetch_toyota_models()
     for m in models:
         model_id, model_name = m["id"], m["name"]
         try:
             prices = _toyota_prices(dealer_id, model_id, model_name)
+            all_data.extend(prices)
+        except Exception as e:
+            print(f"❌ Failed for {model_name}: {e}")
+    return all_data
+
+
+# =====================
+# KIA SCRAPER
+# =====================
+
+KIA_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+}
+
+KIA_HOME = "https://www.kia.com/in/home.html"
+KIA_URL = "https://www.kia.com"
+
+
+# ----------------------------
+# Function 1: Fetch all Kia models
+# ----------------------------
+def fetch_kia_models():
+    """Fetch all Kia models (name + URL)."""
+    resp = requests.get(KIA_HOME, headers=KIA_HEADERS)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    models = []
+    for li in soup.select(".gnb-item.tier-vehicles.has-d2 ul.d2-list > li.d2"):
+        a_tag = li.select_one("a.d2-a > span.text")
+        href_tag = li.select_one("a.d2-a")
+        if a_tag and a_tag.get_text(strip=True) and href_tag:
+            models.append({
+                "name": a_tag.get_text(strip=True),
+                "url": KIA_URL + href_tag['href']
+            })
+    return models
+
+
+# ----------------------------
+# Function 2: Fetch variants & prices for a model
+# ----------------------------
+def _kia_prices(model_name, model_url):
+    """Fetch variant, fuel, transmission, and price for a Kia model."""
+    showroom_url = model_url.replace(".html", "/showroom.html")
+    resp = requests.get(showroom_url, headers=KIA_HEADERS)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    rows = []
+    for trim_card in soup.select("section.trim-card"):
+        # Variant name
+        variant_tag = trim_card.select_one("h3.h4")
+        variant = variant_tag.get_text(strip=True) if variant_tag else ""
+
+        # Fuel and transmission info (if present)
+        details_tag = trim_card.select_one("ul.spec-list li")
+        fuel, trans = "", ""
+        if details_tag:
+            details_text = details_tag.get_text(strip=True)
+            # Simple heuristic: split by '/' or known keywords
+            parts = details_text.split('/')
+            if len(parts) >= 2:
+                fuel = parts[0].strip()
+                trans = parts[1].strip()
+            elif len(parts) == 1:
+                fuel = parts[0].strip()
+
+        # Price
+        price_tag = trim_card.select_one("span.price script")
+        price = None
+        if price_tag and price_tag.string:
+            match = re.search(r"ComUtils\.currency\((\d+)\)", price_tag.string)
+            if match:
+                price = int(match.group(1))
+
+        rows.append({
+            "Brand": "Kia",
+            "Model": model_name,
+            "Variant": variant,
+            "Fuel": fuel,
+            "Transmission": trans,
+            "Price": price
+        })
+    return rows
+
+
+# ----------------------------
+# Function 3: Combine everything
+# ----------------------------
+def fetch_kia_prices():
+    all_data = []
+    models = fetch_kia_models()
+    for m in models:
+        model_name, model_url = m["name"], m["url"]
+        try:
+            prices = _kia_prices(model_name, model_url)
+            all_data.extend(prices)
+        except Exception as e:
+            print(f"❌ Failed for {model_name}: {e}")
+    return all_data
+
+
+# =====================
+# MG SCRAPER
+# =====================
+MG_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+MG_URL = "https://www.mgmotor.co.in"
+
+
+# ----------------------------
+# Function 1: Fetch all MG models
+# ----------------------------
+def fetch_mg_models():
+    """Fetch all MG models (name + URL)."""
+    resp = requests.get(MG_URL, headers=MG_HEADERS)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    models = []
+    for li in soup.select("ul#vechicles li a"):
+        model_name = li.get_text(strip=True)
+        model_url = MG_URL + li['href']
+        models.append({
+            "name": model_name,
+            "url": model_url
+        })
+    return models
+
+
+# ----------------------------
+# Function 2: Fetch variants & prices for a model
+# ----------------------------
+def _mg_prices(model_name, model_url):
+    """Fetch variant, fuel, transmission, and price for an MG model."""
+    resp = requests.get(model_url, headers=MG_HEADERS)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    rows = []
+    for card in soup.select("div.item[data-attribute='model-variant']"):
+        # Variant name
+        variant_tag = card.select_one("p.card-text")
+        variant = variant_tag.get_text(strip=True) if variant_tag else ""
+
+        # Price
+        price_tag = card.select_one("p.model-price")
+        price = None
+        if price_tag:
+            # Extract numeric value, remove currency symbols and commas
+            price_text = price_tag.get_text(strip=True)
+            price_match = re.search(r"(\d[\d,]*)", price_text)
+            if price_match:
+                price = int(price_match.group(1).replace(",", ""))
+
+        # Fuel & Transmission info: MG site usually doesn't have them; leave empty
+        fuel, trans = "", ""
+
+        rows.append({
+            "Brand": "MG Motors",
+            "Model": model_name,
+            "Variant": variant,
+            "Fuel": fuel,
+            "Transmission": trans,
+            "Price": price
+        })
+    return rows
+
+
+# ----------------------------
+# Function 3: Combine everything
+# ----------------------------
+def fetch_mg_prices():
+    all_data = []
+    models = fetch_mg_models()
+    for m in models:
+        model_name, model_url = m["name"], m["url"]
+        try:
+            prices = _mg_prices(model_name, model_url)
             all_data.extend(prices)
         except Exception as e:
             print(f"❌ Failed for {model_name}: {e}")
@@ -616,14 +797,18 @@ def scrape_all_brands_parallel():
         f_tata = ex.submit(fetch_tata_prices_parallel)
         f_hyundai = ex.submit(fetch_hyundai_prices_parallel)
         f_mahindra = ex.submit(fetch_mahindra_prices_parallel)
-        f_toyota = ex.submit(fetch_toyota_prices)  # pass function, don’t call it
+        f_toyota = ex.submit(fetch_toyota_prices)
+        f_kia =ex.submit(fetch_kia_prices)
+        f_mg = ex.submit(fetch_mg_prices)
         maruti = f_maruti.result()
         tata = f_tata.result()
         hyundai = f_hyundai.result()
         mahindra = f_mahindra.result()
         toyota = f_toyota.result()
+        kia = f_kia.result()
+        mg = f_mg.result()
 
-    all_prices = (maruti or []) + (tata or []) + (hyundai or []) + (mahindra or []) + (toyota or [])
+    all_prices = (maruti or []) + (tata or []) + (hyundai or []) + (mahindra or []) + (toyota or []) + (kia or [])+ (mg or [])
     return all_prices
 
 def add_price(brand, model, variant, price, fuel, transmission,timestamp):
@@ -671,43 +856,47 @@ def apply_theme(light_mode: bool):
         """
         return custom_css, "#000000", "white"
 
-# 🔘 Toggle (default = light mode False → dark theme)
-light_mode = st.toggle("🌞 Light Mode", value=False)
-
-# 🎨 Apply theme
-custom_css, plot_bgcolor, font_color = apply_theme(light_mode)
-st.markdown(custom_css, unsafe_allow_html=True)
-
 # =====================
 # STREAMLIT APP
 # =====================
 st.set_page_config(page_title="Car Price Dashboard", layout="wide")
+
+# =====================
+# SIDEBAR
+# =====================
+with st.sidebar:
+    st.header("⚙️ Settings")
+    light_mode = st.toggle("🌞 Light Mode", value=False)
+    custom_css, plot_bgcolor, font_color = apply_theme(light_mode)
+    st.markdown(custom_css, unsafe_allow_html=True)
+
+    if st.button("🔄 Fetch Latest Prices"):
+        with st.spinner("Calling brand APIs in parallel..."):
+            scraped = scrape_all_brands_parallel()
+            if scraped:
+                store_prices(scraped)
+                st.success(f"Scraped & stored {len(scraped)} records.")
+            else:
+                st.error("No prices scraped.")
+
+# =====================
+# MAIN TITLE
+# =====================
 st.title("🚗 Car Price Dashboard")
+
+# Init + Load data
 init_db()
-
-if st.button("🔄 Fetch Latest Prices"):
-    with st.spinner("Calling brand APIs in parallel..."):
-        scraped = scrape_all_brands_parallel()
-        if scraped:
-            store_prices(scraped)
-            st.success(f"Scraped & stored {len(scraped)} records.")
-        else:
-            st.error("No prices scraped.")
-
 df = get_latest_prices()
 if df.empty:
-    st.info("No data yet. Click **Fetch Latest Prices** to load.")
+    st.info("No data yet. Use **Fetch Latest Prices** from the sidebar.")
     st.stop()
 
-# Ensure price is numeric
+# Ensure numeric
 df["price"] = pd.to_numeric(df["price"], errors="coerce")
 df["price_lakhs"] = (df["price"] / 100000).round(2)
 
-# =====================
-# Dynamic & Searchable Filters
-# =====================
-st.sidebar.header("Filter Options")
 
+st.sidebar.header("Filters")
 # Brand filter
 brands_available = sorted(df["brand"].unique())
 selected_brands = st.sidebar.multiselect(
@@ -721,87 +910,19 @@ selected_models = st.sidebar.multiselect(
 
 # Fuel filter depends on selected brands & models
 fuel_available = sorted(df[
-    df["brand"].isin(selected_brands) & df["model"].isin(selected_models)
-]["fuel"].unique())
+                            df["brand"].isin(selected_brands) & df["model"].isin(selected_models)
+                            ]["fuel"].unique())
 selected_fuel = st.sidebar.multiselect(
     "Fuel(s)", options=fuel_available, default=fuel_available
 )
 
 # Transmission filter depends on selected brands & models
 trans_available = sorted(df[
-    df["brand"].isin(selected_brands) & df["model"].isin(selected_models)
-]["transmission"].unique())
+                             df["brand"].isin(selected_brands) & df["model"].isin(selected_models)
+                             ]["transmission"].unique())
 selected_trans = st.sidebar.multiselect(
     "Transmission(s)", options=trans_available, default=trans_available
 )
-
-st.subheader("➕ Add Variant Price")
-
-# Place the form in main layout (not sidebar)
-with st.form("price_entry_form", clear_on_submit=True):
-    cols = st.columns(3)  # 👈 use columns for compact layout
-
-    with cols[0]:
-        brand_in = st.text_input("Brand", value="Maruti")
-        model_in = st.text_input("Model")
-        variant_in = st.text_input("Variant")
-
-    with cols[1]:
-        fuel_in = st.text_input("Fuel", value="Petrol")
-        trans_in = st.text_input("Transmission", value="Manual")
-
-    with cols[2]:
-        # Input price in Lakhs, store in rupees
-        price_lakh_in = st.number_input("Price (₹ Lakhs)", min_value=0.0, step=1.0, format="%.2f")
-
-    submitted = st.form_submit_button("Add Price")
-
-    if submitted and brand_in and model_in and variant_in and price_lakh_in > 0:
-        price_rupees = int(price_lakh_in * 100000)  # convert lakhs → rupees
-        timestamp = datetime.now().isoformat()
-        add_price(brand_in, model_in, variant_in, price_rupees, fuel_in, trans_in, timestamp)
-        st.success(
-            f"✅ Added {brand_in} {model_in} {variant_in} "
-            f"{fuel_in} {trans_in} at ₹{price_rupees:,.0f}"
-        )
-        st.rerun()
-
-
-st.subheader("🗑️ Delete a Manual Entry")
-
-conn = sqlite3.connect(DB_FILE)
-df_manual = pd.read_sql(
-    "SELECT * FROM prices WHERE source='manual' ORDER BY timestamp DESC", conn
-)
-conn.close()
-
-if df_manual.empty:
-    st.info("No manual entries available to delete.")
-else:
-    # Clean label with all details
-    df_manual["label"] = (
-        df_manual["brand"] + " | " +
-        df_manual["model"] + " | " +
-        df_manual["variant"] + " | " +
-        df_manual["fuel"] + " | " +
-        df_manual["transmission"] + " | ₹" +
-        df_manual["price"].astype(str)
-    )
-
-    # Dropdown with proper labels
-    record_choice = st.selectbox(
-        "Select entry to delete",
-        df_manual[["id", "label"]].itertuples(index=False),
-        format_func=lambda x: x.label
-    )
-
-    if st.button("Delete Selected Entry"):
-        delete_price(record_choice.id)   # ✅ deletes only manual
-        st.success("✅ Manual entry deleted.")
-        st.rerun()
-
-
-
 # Price slider filter
 min_price = int(df["price_lakhs"].min())
 max_price = int(df["price_lakhs"].max())
@@ -811,7 +932,6 @@ price_range = st.sidebar.slider(
     max_value=max_price,
     value=(min_price, max_price)
 )
-
 # Apply all filters
 df_filtered = df[
     df["brand"].isin(selected_brands) &
@@ -820,7 +940,7 @@ df_filtered = df[
     df["transmission"].isin(selected_trans) &
     (df["price_lakhs"] >= price_range[0]) &
     (df["price_lakhs"] <= price_range[1])
-].copy()
+    ].copy()
 
 if df_filtered.empty:
     st.warning("No data matches selected filters.")
@@ -828,375 +948,470 @@ if df_filtered.empty:
 
 
 # =====================
-# Variant Label Filter
+# TABS
 # =====================
-all_variants = df_filtered["variant"].unique().tolist()
-selected_variants = st.multiselect(
-    "Select Variants to Show in Chart Labels",
-    options=all_variants,
-    default=all_variants
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["📈 Dashboard", "📋 Price Table", "📜 Price History", "🛠 Manage Entries"]
 )
 
-# Only selected variants get a label
-df_filtered["label"] = df_filtered.apply(
-    lambda r: f"{r['variant']} {'CNG' if 'cng' in str(r['fuel']).lower() else ''} ({r['price_lakhs']:.2f}L)"
-    if r["variant"] in selected_variants else "",
-    axis=1
-)
+# -----------------
+# TAB 1: DASHBOARD
+# -----------------
+with tab1:
+    st.subheader("Visual Analytics")
 
-
-# =====================
-# Chart selection
-# =====================
-chart_type = st.radio(
-    "Select Chart Type",
-    ["Price Range Chart","Scatter Plot", "Violin Plot", "Line Chart", "Treemap"],  # NEW OPTION
-    horizontal=True
-)
-
-
-# ---- Default order (by min price) ----
-model_order = (
-    df_filtered.groupby("model", observed=True)["price_lakhs"]
-    .min()
-    .sort_values()
-    .index
-    .tolist()
-)
-
-st.sidebar.subheader("📋 Arrange Models")
-st.markdown("""
-    <style>
-    .sortable-item {
-        padding: 4px 8px !important;
-        margin: 2px 0 !important;
-        font-size: 0.85rem !important;
-    }
-    .sortable-container {
-        padding: 2px !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-# Drag-and-drop list
-
-with st.sidebar.expander("📋 Arrange Models", expanded=True):
-    current_models = model_order  # always from latest filter
-
-    # Ensure session_state has the right models
-    if "final_order" not in st.session_state:
-        st.session_state.final_order = current_models
-    else:
-        # Add missing models
-        for m in current_models:
-            if m not in st.session_state.final_order:
-                st.session_state.final_order.append(m)
-        # Remove ones not in current selection
-        st.session_state.final_order = [
-            m for m in st.session_state.final_order if m in current_models
-        ]
-
-    # --- Pass current models in the latest order ---
-    ordered_models = [m for m in st.session_state.final_order if m in current_models]
-    custom_order = sortables.sort_items(
-        items=ordered_models,
-        key=f"sortable_models_{len(ordered_models)}"
+    # =====================
+    # Variant Label Filter
+    # =====================
+    all_variants = df_filtered["variant"].unique().tolist()
+    selected_variants = st.multiselect(
+        "Select Variants to Show in Chart Labels",
+        options=all_variants,
+        default=all_variants
     )
 
-    # Handle None or []
-    if not custom_order:
-        custom_order = ordered_models
-
-    # Update if changed
-    if custom_order != st.session_state.final_order:
-        st.session_state.final_order = custom_order
-
-    order_to_use = st.session_state.final_order
-
-st.sidebar.write("👉 Final Order:", order_to_use)
-
-# ---- Filter data only to selected models ----
-df_filtered["model"] = pd.Categorical(
-            df_filtered["model"], categories=order_to_use, ordered=True
-        )
-df_filtered = df_filtered.sort_values(["model", "timestamp"])
-
-# ---------------------
-# Price Range Chart
-# ---------------------
-if chart_type == "Price Range Chart":
-    price_range_df = (
-        df_filtered.groupby("model", observed=True)
-        .agg(min_price_lakh=("price_lakhs", "min"),
-             max_price_lakh=("price_lakhs", "max"))
-        .reset_index()
-    )
-
-    fig = go.Figure()
-
-    # Apply custom order
-    price_range_df["model"] = pd.Categorical(price_range_df["model"], categories=order_to_use, ordered=True)
-    price_range_df = price_range_df.sort_values("model")
-
-    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
-    df_filtered = df_filtered.sort_values("model")
-
-    fig.add_trace(go.Bar(
-        x=price_range_df["model"],
-        y=price_range_df["max_price_lakh"] - price_range_df["min_price_lakh"],
-        base=price_range_df["min_price_lakh"],
-        name="Price Range",
-        marker=dict(color="lightblue"),
-        opacity=0.4,
-        hoverinfo="skip"
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=df_filtered["model"],
-        y=df_filtered["price_lakhs"],
-        mode="markers+text",
-        name="Variants",
-        text=df_filtered["label"],
-        textposition="middle right",
-        hovertemplate="<b>%{text}</b><br>Model: %{x}<br>Price: ₹%{y} L<extra></extra>",
-        marker=dict(color="dark blue", size=9, line=dict(width=1, color="white")),
-        cliponaxis=False
-    ))
-
-# ---------------------
-# Scatter Plot
-# ---------------------
-elif chart_type == "Scatter Plot":
-    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
-
-    fig = px.scatter(
-        df_filtered,
-        x="model",
-        y="price_lakhs",
-        color="fuel",
-        size="price_lakhs",
-        text="label",
-        hover_data=["brand", "variant", "transmission"],
-        title="Price of Each Variant by Model & Fuel (₹ Lakhs)",
-        category_orders={"model": order_to_use},
-        height=520
-    )
-    fig.update_traces(textposition="middle center")
-
-# ---------------------
-# Violin Plot
-# ---------------------
-elif chart_type == "Violin Plot":
-    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
-
-    fig = px.violin(
-        df_filtered,
-        x="brand",
-        y="price_lakhs",
-        color="brand",
-        box=True,
-        points="all",
-        title="Price Distribution by Brand (₹ Lakhs)",
-        height=520
-    )
-
-    scatter = px.scatter(
-        df_filtered,
-        x="brand",
-        y="price_lakhs",
-        text="label",
-        color="brand"
-    )
-    scatter.update_traces(textposition="top center", showlegend=False)
-    for trace in scatter.data:
-        fig.add_trace(trace)
-
-# ---------------------
-# Line Chart
-# ---------------------
-elif chart_type == "Line Chart":
-    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
-    df_filtered = df_filtered.sort_values("model")
-
-    fig = px.line(
-        df_filtered.sort_values("price_lakhs"),
-        x="model",
-        y="price_lakhs",
-        color="brand",
-        markers=True,
-        text="label",
-        title="Price Trends by Model (₹ Lakhs)",
-        category_orders={"model": order_to_use},
-        height=520
-    )
-    fig.update_traces(textposition="top center")
-
-# ---------------------
-# Treemap
-# ---------------------
-elif chart_type == "Treemap":
-    df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
-    df_filtered = df_filtered.sort_values(["model", "price_lakhs"])
-
-    df_filtered["variant_treemap_label"] = df_filtered.apply(
-        lambda r: "<br>".join(textwrap.wrap(
-            f"{r['variant']} {'CNG' if r['fuel'] == 'CNG' else ''}", width=12
-        )),
+    # Only selected variants get a label
+    df_filtered["label"] = df_filtered.apply(
+        lambda r: f"{r['variant']} {'CNG' if 'cng' in str(r['fuel']).lower() else ''} ({r['price_lakhs']:.2f}L)"
+        if r["variant"] in selected_variants else "",
         axis=1
     )
 
-    df_sorted = df_filtered.sort_values(["model", "price_lakhs"], ascending=[True, True])
-
-    fig = px.treemap(
-        df_sorted,
-        path=["brand", "model", "variant_treemap_label"],
-        values="price_lakhs",
-        color="price_lakhs",
-        color_continuous_scale="Blues" if light_mode else "Viridis",
-        title="Brand → Model → Variant Price Share",
-        hover_data={"brand": True, "model": True, "variant": True, "price_lakhs": ":.2f"}
+    # ---- Default order (by min price) ----
+    model_order = (
+        df_filtered.groupby("model", observed=True)["price_lakhs"]
+        .min()
+        .sort_values()
+        .index
+        .tolist()
     )
 
-    fig.update_traces(
-        textfont=dict(size=14, family="Arial", color="black" if light_mode else "white"),
-        texttemplate="%{label}<br>₹%{value:.2f} L",
-        sort=False
+    st.sidebar.subheader("📋 Arrange Models")
+    st.markdown("""
+        <style>
+        .sortable-item {
+            padding: 4px 8px !important;
+            margin: 2px 0 !important;
+            font-size: 0.85rem !important;
+        }
+        .sortable-container {
+            padding: 2px !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    # Drag-and-drop list
+
+    with st.sidebar.expander("📋 Arrange Models", expanded=True):
+        current_models = model_order  # always from latest filter
+
+        # Ensure session_state has the right models
+        if "final_order" not in st.session_state:
+            st.session_state.final_order = current_models
+        else:
+            # Add missing models
+            for m in current_models:
+                if m not in st.session_state.final_order:
+                    st.session_state.final_order.append(m)
+            # Remove ones not in current selection
+            st.session_state.final_order = [
+                m for m in st.session_state.final_order if m in current_models
+            ]
+
+        # --- Pass current models in the latest order ---
+        ordered_models = [m for m in st.session_state.final_order if m in current_models]
+        custom_order = sortables.sort_items(
+            items=ordered_models,
+            key=f"sortable_models_{len(ordered_models)}"
+        )
+
+        # Handle None or []
+        if not custom_order:
+            custom_order = ordered_models
+
+        # Update if changed
+        if custom_order != st.session_state.final_order:
+            st.session_state.final_order = custom_order
+
+        order_to_use = st.session_state.final_order
+
+    st.sidebar.write("👉 Final Order:", order_to_use)
+
+    # ---- Filter data only to selected models ----
+    df_filtered["model"] = pd.Categorical(
+        df_filtered["model"], categories=order_to_use, ordered=True
     )
+    df_filtered = df_filtered.sort_values(["model", "timestamp"])
 
-# ---------------------
-# Layout
-# ---------------------
-fig.update_layout(
-    title="Car Model Price Ranges and Variant Prices (in Lakhs)",
-    xaxis=dict(
-        title="Model",
-        tickangle=0,
-        automargin=True,
-        rangeslider=dict(visible=False),
-        fixedrange=False
-    ),
-    yaxis=dict(
-        title="Price (₹ Lakhs)",
-        automargin=True,
-        fixedrange=False
-    ),
-    hovermode="closest",
-    plot_bgcolor=plot_bgcolor,
-    paper_bgcolor=plot_bgcolor,
-    font=dict(color=font_color)
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# Price Table
-st.subheader("Price Table (sorted by Brand, Model, Price)")
-df_table = df_filtered.sort_values(["brand", "model", "price_lakhs"])[
-    ["brand", "model", "fuel", "transmission", "variant", "price_lakhs"]
-].rename(columns={"price_lakhs": "Price (₹ Lakhs)"})
-df_table["Price (₹ Lakhs)"] = df_table["Price (₹ Lakhs)"].map(lambda x: f"{x:.2f}")
-st.dataframe(df_table, use_container_width=True)
-
-
-def load_price_history():
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql("SELECT * FROM prices ORDER BY timestamp", conn)
-    conn.close()
-    return df
-
-st.title("📈 Price History Viewer")
-
-df = load_price_history()
-
-if df.empty:
-    st.warning("No price history found in the database.")
-else:
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    # 👉 Add this line to convert price into lakhs
-    df["price_lakhs"] = df["price"] / 100000
-
-    df["date"] = df["timestamp"].dt.date
-
-    # Sidebar filters
-    brand = st.selectbox("Select Brand", sorted(df["brand"].unique()))
-    models = st.multiselect(
-        "Select Models",
-        sorted(df[df["brand"] == brand]["model"].unique()),
-        default=df[df["brand"] == brand]["model"].unique()
+    # =====================
+    # Chart selection
+    # =====================
+    chart_type = st.radio(
+        "Select Chart Type",
+        ["Price Range", "Scatter Plot", "Violin Plot", "Line Chart", "Treemap"],  # NEW OPTION
+        horizontal=True
     )
-    variants = st.multiselect(
-        "Select Variants",
-        sorted(df[(df["brand"] == brand) & (df["model"].isin(models))]["variant"].unique()),
-        default=df[(df["brand"] == brand) & (df["model"].isin(models))]["variant"].unique()
-    )
-
-    # Filter dataframe
-    df_filtered = df[
-        (df["brand"] == brand) &
-        (df["model"].isin(models)) &
-        (df["variant"].isin(variants))
-    ].copy()
-
-    if df_filtered.empty:
-        st.warning("No data for selected combination.")
-    else:
-        df_daywise = (
-            df_filtered.groupby(["model", "variant", "date"], observed=True)
-            .agg({"price": "last"})
+    # ---------------------
+    # Price Range Chart
+    # ---------------------
+    if chart_type == "Price Range":
+        price_range_df = (
+            df_filtered.groupby("model", observed=True)
+            .agg(min_price_lakh=("price_lakhs", "min"),
+                 max_price_lakh=("price_lakhs", "max"))
             .reset_index()
         )
 
-        if df_daywise.empty or df_daywise["date"].isna().all():
-            st.warning("No valid data available for plotting.")
-        else:
-            all_days = pd.date_range(
-                start=df_daywise["date"].min(),
-                end=date.today(),
-                freq="D"
+        fig = go.Figure()
+
+        # Apply custom order
+        price_range_df["model"] = pd.Categorical(price_range_df["model"], categories=order_to_use, ordered=True)
+        price_range_df = price_range_df.sort_values("model")
+
+        df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+        df_filtered = df_filtered.sort_values("model")
+
+        fig.add_trace(go.Bar(
+            x=price_range_df["model"],
+            y=price_range_df["max_price_lakh"] - price_range_df["min_price_lakh"],
+            base=price_range_df["min_price_lakh"],
+            name="Price Range",
+            marker=dict(color="lightblue"),
+            opacity=0.4,
+            hoverinfo="skip"
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=df_filtered["model"],
+            y=df_filtered["price_lakhs"],
+            mode="markers+text",
+            name="Variants",
+            text=df_filtered["label"],
+            textposition="middle right",
+            hovertemplate="<b>%{text}</b><br>Model: %{x}<br>Price: ₹%{y} L<extra></extra>",
+            marker=dict(color="dark blue", size=9, line=dict(width=1, color="white")),
+            cliponaxis=False
+        ))
+
+    # ---------------------
+    # Scatter Plot
+    # ---------------------
+    elif chart_type == "Scatter Plot":
+        df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+
+        fig = px.scatter(
+            df_filtered,
+            x="model",
+            y="price_lakhs",
+            color="fuel",
+            size="price_lakhs",
+            text="label",
+            hover_data=["brand", "variant", "transmission"],
+            title="Price of Each Variant by Model & Fuel (₹ Lakhs)",
+            category_orders={"model": order_to_use},
+            height=520
+        )
+        fig.update_traces(textposition="middle center")
+
+    # ---------------------
+    # Violin Plot
+    # ---------------------
+    elif chart_type == "Violin Plot":
+        df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+
+        fig = px.violin(
+            df_filtered,
+            x="brand",
+            y="price_lakhs",
+            color="brand",
+            box=True,
+            points="all",
+            title="Price Distribution by Brand (₹ Lakhs)",
+            height=520
+        )
+
+        scatter = px.scatter(
+            df_filtered,
+            x="brand",
+            y="price_lakhs",
+            text="label",
+            color="brand"
+        )
+        scatter.update_traces(textposition="top center", showlegend=False)
+        for trace in scatter.data:
+            fig.add_trace(trace)
+
+    # ---------------------
+    # Line Chart
+    # ---------------------
+    elif chart_type == "Line Chart":
+        df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+        df_filtered = df_filtered.sort_values("model")
+
+        fig = px.line(
+            df_filtered.sort_values("price_lakhs"),
+            x="model",
+            y="price_lakhs",
+            color="brand",
+            markers=True,
+            text="label",
+            title="Price Trends by Model (₹ Lakhs)",
+            category_orders={"model": order_to_use},
+            height=520
+        )
+        fig.update_traces(textposition="top center")
+
+    # ---------------------
+    # Treemap
+    # ---------------------
+    elif chart_type == "Treemap":
+        df_filtered["model"] = pd.Categorical(df_filtered["model"], categories=order_to_use, ordered=True)
+        df_filtered = df_filtered.sort_values(["model", "price_lakhs"])
+
+        df_filtered["variant_treemap_label"] = df_filtered.apply(
+            lambda r: "<br>".join(textwrap.wrap(
+                f"{r['variant']} {'CNG' if r['fuel'] == 'CNG' else ''}", width=12
+            )),
+            axis=1
+        )
+
+        df_sorted = df_filtered.sort_values(["model", "price_lakhs"], ascending=[True, True])
+
+        fig = px.treemap(
+            df_sorted,
+            path=["brand", "model", "variant_treemap_label"],
+            values="price_lakhs",
+            color="price_lakhs",
+            color_continuous_scale="Blues" if light_mode else "Viridis",
+            title="Brand → Model → Variant Price Share",
+            hover_data={"brand": True, "model": True, "variant": True, "price_lakhs": ":.2f"}
+        )
+
+        fig.update_traces(
+            textfont=dict(size=14, family="Arial", color="black" if light_mode else "white"),
+            texttemplate="%{label}<br>₹%{value:.2f} L",
+            sort=False
+        )
+
+    # ---------------------
+    # Layout
+    # ---------------------
+    fig.update_layout(
+        title="Model Prices (in Lakhs)",
+        xaxis=dict(
+            title="Model",
+            automargin=True,
+            rangeslider=dict(visible=False),
+            fixedrange=False
+        ),
+        yaxis=dict(
+            title="Price (₹ Lakhs)",
+            automargin=True,
+            fixedrange=False
+        ),
+        hovermode="closest",
+        plot_bgcolor=plot_bgcolor,
+        paper_bgcolor=plot_bgcolor,
+        font=dict(color=font_color)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+# -----------------
+# TAB 2: TABLE
+# -----------------
+with tab2:
+    st.subheader("Price Table")
+    df_table = df_filtered.sort_values(["brand", "model", "price_lakhs"])[
+        ["brand", "model", "fuel", "transmission", "variant", "price_lakhs"]
+    ].rename(columns={"price_lakhs": "Price (₹ Lakhs)"})
+    df_table["Price (₹ Lakhs)"] = df_table["Price (₹ Lakhs)"].map(lambda x: f"{x:.2f}")
+    st.dataframe(df_table, use_container_width=True)
+
+
+with tab3:
+    st.subheader("📈 Price History Viewer")
+
+    def load_price_history(brands, models):
+        conn = sqlite3.connect(DB_FILE)
+        # Query only for selected brands and models to reduce data
+        query = """
+            SELECT * FROM prices
+            WHERE brand IN ({})
+                AND model IN ({})
+            ORDER BY timestamp
+        """.format(
+            ",".join(["?"] * len(brands)) if brands else "'*'",
+            ",".join(["?"] * len(models)) if models else "'*'"
+        )
+        params = brands + models if brands and models else []
+        df = pd.read_sql(query, conn, params=params)
+        conn.close()
+        return df
+
+    # Use main app's filtered brands and models
+    brands = selected_brands if selected_brands else sorted(df["brand"].unique())
+    models = selected_models if selected_models else sorted(df[df["brand"].isin(brands)]["model"].unique())
+
+    # Load historical data for filtered brands and models
+    df_history = load_price_history(brands, models)
+
+    if df_history.empty:
+        st.warning("No price history found for selected brands and models.")
+        st.stop()
+
+    df_history["timestamp"] = pd.to_datetime(df_history["timestamp"], errors="coerce")
+    if df_history["timestamp"].isna().any():
+        st.warning(f"{df_history['timestamp'].isna().sum()} records dropped due to invalid timestamps.")
+        df_history = df_history.dropna(subset=["timestamp"])
+
+    df_history["price_lakhs"] = (df_history["price"] / 100000).round(2)
+    df_history["date"] = df_history["timestamp"].dt.date
+
+    if df_history.empty:
+        st.warning("No valid data after processing timestamps.")
+        st.stop()
+
+    # Allow variant filtering in tab3
+    with st.sidebar.expander("Price History Filters", expanded=True):
+        variants = st.multiselect(
+            "Select Variants",
+            sorted(df_history["variant"].unique()),
+            default=sorted(df_history["variant"].unique()),
+            key="history_variants"
+        )
+
+    # Filter by selected variants
+    df_filtered_history = df_history[df_history["variant"].isin(variants)].copy()
+
+    if df_filtered_history.empty:
+        st.warning("No data for selected variants.")
+        st.stop()
+
+    # Aggregate by day, keeping the last price
+    df_daywise = (
+        df_filtered_history.groupby(["brand", "model", "variant", "date"], observed=True)
+        .agg({"price": "last"})
+        .reset_index()
+    )
+
+    if df_daywise.empty or df_daywise["date"].isna().all():
+        st.warning("No valid data available for plotting.")
+        st.stop()
+
+    # Fill missing dates using pivot and reindex
+    pivot_df = df_daywise.pivot_table(
+        index=["brand", "model", "variant"],
+        columns="date",
+        values="price",
+        aggfunc="last"
+    )
+    all_days = pd.date_range(start=df_daywise["date"].min(), end=date.today(), freq="D")
+    pivot_df = pivot_df.reindex(columns=all_days).ffill(axis=1).bfill(axis=1)
+    # Rename level_3 to date to fix ValueError
+    df_daywise = pivot_df.stack(future_stack=True).reset_index(name="price").rename(columns={"level_3": "date"})
+    df_daywise["price_lakhs"] = (df_daywise["price"] / 100000).round(2)
+    df_daywise["label"] = df_daywise["brand"] + " | " + df_daywise["model"] + " - " + df_daywise["variant"]
+
+    # Plot line chart
+    fig = px.line(
+        df_daywise,
+        x="date",
+        y="price_lakhs",
+        color="label",
+        title=f"Price Trends ({', '.join(brands)})",
+        markers=True,
+        line_shape="hv"  # Step line for discrete data points
+    )
+    fig.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Price (₹ Lakhs)",
+        plot_bgcolor=plot_bgcolor,
+        paper_bgcolor=plot_bgcolor,
+        font=dict(color=font_color)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # History table (limit to last 7 days for readability)
+    st.subheader("📜 Price History Table")
+    recent_days = pd.date_range(end=date.today(), periods=7, freq="D")
+    df_wide = df_daywise.pivot_table(
+        index=["brand", "model", "variant"],
+        columns="date",
+        values="price_lakhs",
+        aggfunc="last"
+    ).reset_index()
+    df_wide.columns = [str(c) for c in df_wide.columns]
+    # Filter to recent days
+    display_cols = ["brand", "model", "variant"] + [col for col in df_wide.columns if pd.to_datetime(col, errors="coerce") in recent_days]
+    st.dataframe(df_wide[display_cols], use_container_width=True)
+
+
+
+# -----------------
+# TAB 4: MANAGE
+# -----------------
+with tab4:
+    st.subheader("➕ Add Variant Price")
+    # Place the form in main layout (not sidebar)
+    with st.form("price_entry_form", clear_on_submit=True):
+        cols = st.columns(3)  # 👈 use columns for compact layout
+
+        with cols[0]:
+            brand_in = st.text_input("Brand", value="Maruti")
+            model_in = st.text_input("Model")
+            variant_in = st.text_input("Variant")
+
+        with cols[1]:
+            fuel_in = st.text_input("Fuel", value="Petrol")
+            trans_in = st.text_input("Transmission", value="Manual")
+
+        with cols[2]:
+            # Input price in Lakhs, store in rupees
+            price_lakh_in = st.number_input("Price (₹ Lakhs)", min_value=0.0, step=1.0, format="%.2f")
+
+        submitted = st.form_submit_button("Add Price")
+
+        if submitted and brand_in and model_in and variant_in and price_lakh_in > 0:
+            price_rupees = int(price_lakh_in * 100000)  # convert lakhs → rupees
+            timestamp = datetime.now().isoformat()
+            add_price(brand_in, model_in, variant_in, price_rupees, fuel_in, trans_in, timestamp)
+            st.success(
+                f"✅ Added {brand_in} {model_in} {variant_in} "
+                f"{fuel_in} {trans_in} at ₹{price_rupees:,.0f}"
             )
-            filled_list = []
-            for (mdl, var) in df_daywise[["model", "variant"]].drop_duplicates().itertuples(index=False):
-                temp = (
-                    df_daywise[(df_daywise["model"] == mdl) & (df_daywise["variant"] == var)]
-                    .set_index("date")
-                    .reindex(all_days)
-                    .rename_axis("date")
-                    .reset_index()
-                )
-                temp["model"] = mdl
-                temp["variant"] = var
-                temp["price"] = temp["price"].ffill()
-                filled_list.append(temp)
+            st.rerun()
 
-            if not filled_list:
-                st.warning("No filled data to plot.")
-            else:
-                df_daywise = pd.concat(filled_list, ignore_index=True)
-                df_daywise["price_lakhs"] = (df_daywise["price"] / 100000).round(2)
-                df_daywise["label"] = df_daywise["model"] + " - " + df_daywise["variant"]
+    st.subheader("🗑️ Delete a Manual Entry")
 
-                # ✅ Plot only if df_daywise has valid rows
-                if not df_daywise.empty:
-                    fig = px.line(
-                        df_daywise,
-                        x="date",
-                        y="price_lakhs",
-                        color="label",
-                        title=f"Price Trend: {brand}",
-                        markers=True
-                    )
-                    fig.update_layout(
-                        xaxis_title="Date",
-                        yaxis_title="Price (₹ Lakhs)"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+    conn = sqlite3.connect(DB_FILE)
+    df_manual = pd.read_sql(
+        "SELECT * FROM prices WHERE source='manual' ORDER BY timestamp DESC", conn
+    )
+    conn.close()
 
-                    # Show full price history
-                    st.subheader("📜 Price History")
-                    df_wide = df_daywise.pivot_table(
-                        index=["model", "variant"],
-                        columns="date",
-                        values="price_lakhs",
-                        aggfunc="last"
-                    ).reset_index()
-                    df_wide.insert(0, "brand", brand)
-                    df_wide.columns = [str(c) for c in df_wide.columns]
-                    st.dataframe(df_wide, use_container_width=True)
+    if df_manual.empty:
+        st.info("No manual entries available to delete.")
+    else:
+        # Clean label with all details
+        df_manual["label"] = (
+                df_manual["brand"] + " | " +
+                df_manual["model"] + " | " +
+                df_manual["variant"] + " | " +
+                df_manual["fuel"] + " | " +
+                df_manual["transmission"] + " | ₹" +
+                df_manual["price"].astype(str)
+        )
+
+        # Dropdown with proper labels
+        record_choice = st.selectbox(
+            "Select entry to delete",
+            df_manual[["id", "label"]].itertuples(index=False),
+            format_func=lambda x: x.label
+        )
+
+        if st.button("Delete Selected Entry"):
+            delete_price(record_choice.id)  # ✅ deletes only manual
+            st.success("✅ Manual entry deleted.")
+            st.rerun()
+
+
