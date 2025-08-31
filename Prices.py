@@ -736,6 +736,141 @@ def fetch_mg_prices():
             print(f"❌ Failed for {model_name}: {e}")
     return all_data
 
+
+# =====================
+# Nissan SCRAPER
+# =====================
+
+BASE_URL = "https://www.nissan.in/prices-list.html"
+
+headers = {
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/139.0.0.0 Safari/537.36"
+}
+
+# ----------------------------
+# Helper: find model name for a table
+# ----------------------------
+def find_nissan_name_for_table(table):
+    # 1) Prefer <h2 class="heading"> near the table
+    prev = table.find_previous('h2', class_='heading')
+    if prev and prev.get_text(strip=True):
+        model = prev.get_text(" ", strip=True)
+    else:
+        # 2) Scan previous tags for the first one that mentions "Nissan"
+        model = None
+        for tag in table.find_all_previous():
+            if tag.name in ('h2', 'h3', 'span', 'p', 'div') and tag.get_text(strip=True):
+                text = tag.get_text(" ", strip=True)
+                if re.search(r'\bNissan\b', text, re.I):
+                    model = text
+                    break
+        # 3) fallback to nearest heading-like tag
+        if not model:
+            prev = table.find_previous(['h2', 'h3', 'p', 'strong'])
+            model = prev.get_text(" ", strip=True) if prev and prev.get_text(strip=True) else "Unknown Model"
+
+    # Normalize: remove leading "New " and "Nissan " from model name
+    model = re.sub(r'^(New\s+)?Nissan\s+', '', model, flags=re.I).strip()
+    return model if model else "Unknown Model"
+
+
+# ----------------------------
+# Function 1: Fetch all models -> returns dict { model_name: [table, ...] }
+# ----------------------------
+def fetch_nissan_models():
+    resp = requests.get(BASE_URL, headers=headers)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    models = {}
+    for table in soup.find_all("table"):
+        model_name = find_nissan_name_for_table(table)
+        models.setdefault(model_name, []).append(table)
+    return models
+
+
+# ----------------------------
+# Parse fuel & transmission from variant string
+# ----------------------------
+def parse_fuel_trans(variant):
+    fuel, trans = "", ""
+    v = variant.upper()
+    if re.search(r'\bCVT\b|\bAT\b|AUTOMATIC', v):
+        trans = "Automatic"
+    elif re.search(r'\bMT\b|\bMANUAL', v):
+        trans = "Manual"
+
+    if re.search(r'TURBO', v):
+        fuel = "Petrol Turbo"
+    elif re.search(r'DIESEL', v):
+        fuel = "Diesel"
+    elif re.search(r'PETROL', v):
+        fuel = "Petrol"
+    return fuel, trans
+
+
+# ----------------------------
+# Clean variant name: remove "Nissan", "New Nissan", and transmission tokens
+# ----------------------------
+def clean_variant_name(variant):
+    # remove Nissan prefix
+    variant = re.sub(r'^(New\s+)?Nissan\s+', '', variant, flags=re.I)
+    # remove transmission tokens and extra parentheses/brackets remnants
+    variant = re.sub(r'\b(MT|CVT|AT|Manual|Automatic)\b', '', variant, flags=re.I)
+    # collapse multiple spaces and strip
+    variant = re.sub(r'\s{2,}', ' ', variant).strip()
+    # remove leading/trailing punctuation
+    variant = variant.strip(" -–—:;()[]")
+    return variant
+
+
+# ----------------------------
+# Function 2: Fetch prices for one model (accepts list of tables for that model)
+# ----------------------------
+def _nissan_prices(model_name, tables):
+    rows = []
+    for table in tables:
+        for row in table.find_all("tr")[1:]:  # skip header row
+            cols = [c.get_text(strip=True).replace("\xa0", " ") for c in row.find_all("td")]
+            if len(cols) == 2:
+                variant_raw, price_raw = cols
+                # parse price
+                clean_price = price_raw.replace(",", "").replace("₹", "").strip()
+                try:
+                    clean_price = int(clean_price)
+                except:
+                    clean_price = None
+
+                fuel, trans = parse_fuel_trans(variant_raw)
+                variant = clean_variant_name(variant_raw)
+
+                rows.append({
+                    "Brand": "Nissan",
+                    "Model": model_name,          # normalized model (no 'Nissan' prefix)
+                    "Fuel": fuel,
+                    "Transmission": trans,
+                    "Variant": variant,
+                    "Price": clean_price
+                })
+    return rows
+
+
+# ----------------------------
+# Function 3: Combine everything into a DataFrame
+# ----------------------------
+def fetch_nissan_prices():
+    all_data = []
+    models = fetch_nissan_models()  # dict: model -> [table, ...]
+    for model_name, tables in models.items():
+        try:
+            prices = _nissan_prices(model_name, tables)
+            all_data.extend(prices)
+        except Exception as e:
+            print(f"❌ Failed for {model_name}: {e}")
+    return all_data
+
+
 # =====================
 # DB HELPERS
 # =====================
@@ -800,6 +935,7 @@ def scrape_all_brands_parallel():
         f_toyota = ex.submit(fetch_toyota_prices)
         f_kia =ex.submit(fetch_kia_prices)
         f_mg = ex.submit(fetch_mg_prices)
+        f_nissan = ex.submit(fetch_nissan_prices)
         maruti = f_maruti.result()
         tata = f_tata.result()
         hyundai = f_hyundai.result()
@@ -807,8 +943,9 @@ def scrape_all_brands_parallel():
         toyota = f_toyota.result()
         kia = f_kia.result()
         mg = f_mg.result()
+        nissan = f_nissan.result()
 
-    all_prices = (maruti or []) + (tata or []) + (hyundai or []) + (mahindra or []) + (toyota or []) + (kia or [])+ (mg or [])
+    all_prices = (maruti or []) + (tata or []) + (hyundai or []) + (mahindra or []) + (toyota or []) + (kia or [])+ (mg or []) + (nissan or [])
     return all_prices
 
 def add_price(brand, model, variant, price, fuel, transmission,timestamp):
@@ -1413,5 +1550,3 @@ with tab4:
             delete_price(record_choice.id)  # ✅ deletes only manual
             st.success("✅ Manual entry deleted.")
             st.rerun()
-
-
