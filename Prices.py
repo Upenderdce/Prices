@@ -9,8 +9,6 @@ import streamlit_sortables as sortables
 import initialization
 import scraping
 import theme
-import io
-import xlsxwriter
 
 st.set_page_config(page_title="Car Price Dashboard", layout="wide")
 
@@ -97,7 +95,6 @@ with tab1:
     df_filtered["variant_display"] = df_filtered.apply(
         lambda r: f"{r['model']} - {r['variant']}",
         axis=1)
-    print(df_filtered)
 
     variant_map = dict(zip(df_filtered["variant_display"], df_filtered["variant"]))
 
@@ -568,155 +565,279 @@ with tab4:
             st.success("✅ Manual entry deleted.")
             st.rerun()
 
+import io
+import math
+import pandas as pd
+import numpy as np
+
+def _col_idx_to_excel(col_idx: int) -> str:
+    """Convert 0-based column index to Excel column letters (A, B, ..., AA, AB...)."""
+    col = col_idx
+    letters = ""
+    while col >= 0:
+        letters = chr((col % 26) + ord("A")) + letters
+        col = col // 26 - 1
+    return letters
 
 
-def to_excel_price_range_chart(df_filtered, order_to_use):
-    output = io.BytesIO()
+def to_excel_price_range_chart(df_filtered: pd.DataFrame, order_to_use: list):
 
-    # --- Prepare dataframes ---
+    df = df_filtered.copy()
+    if "price_lakhs" not in df.columns:
+        raise ValueError("df_filtered must contain 'price_lakhs' column")
+
+    df["price_lakhs"] = pd.to_numeric(df["price_lakhs"], errors="coerce")
+    df["model"] = df["model"].astype(str)
+    df["variant"] = df["variant"].astype(str)
+
+    # --- Price range per model ---
     price_range_df = (
-        df_filtered.groupby("model", observed=True)
-        .agg(min_price_lakh=("price_lakhs", "min"),
-             max_price_lakh=("price_lakhs", "max"))
+        df.groupby("model", observed=True)
+        .agg(min_price_lakh=("price_lakhs", "min"), max_price_lakh=("price_lakhs", "max"))
         .reset_index()
     )
 
-    # enforce order
+    # enforce order_to_use (will keep models in provided order)
     price_range_df["model"] = pd.Categorical(
         price_range_df["model"], categories=order_to_use, ordered=True
     )
     price_range_df = price_range_df.sort_values("model").reset_index(drop=True)
 
-    df_filtered = df_filtered.copy()
-    df_filtered["model"] = pd.Categorical(
-        df_filtered["model"], categories=order_to_use, ordered=True
-    )
-    df_filtered = df_filtered.sort_values(["model", "variant"]).reset_index(drop=True)
+    # --- Assign variant positions dynamically by ascending price ---
+    # We use 'rank(method="first")' to ensure unique position order when prices tie.
+    df_sorted = df.sort_values(["model", "price_lakhs", "variant"]).copy()
+    df_sorted["rank"] = df_sorted.groupby("model")["price_lakhs"].rank(method="first").astype(int)
+    df_sorted["variant_pos"] = "V" + df_sorted["rank"].astype(str)
 
-    # Pivot by variant (so columns = V1, V2, V3, ...)
-    df_variants = (
-        df_filtered.pivot_table(
-            index="model", columns="variant", values="price_lakhs", aggfunc="first"
+    # Maximum number of variant positions across all models (V1..Vn)
+    if df_sorted["rank"].size == 0:
+        max_rank = 0
+    else:
+        max_rank = int(df_sorted["rank"].max())
+
+    variant_list = [f"V{i}" for i in range(1, max_rank + 1)]
+
+    # Pivot prices into columns named V1, V2, ...
+    if max_rank > 0:
+        df_variants = (
+            df_sorted.pivot_table(index="model", columns="variant_pos", values="price_lakhs", aggfunc="first")
+            .reindex(order_to_use)
+        )
+        # Ensure full set of columns V1..Vn exists (some may be missing for some datasets)
+        for v in variant_list:
+            if v not in df_variants.columns:
+                df_variants[v] = np.nan
+        # Reorder columns
+        df_variants = df_variants[variant_list]
+    else:
+        # No variants at all
+        df_variants = pd.DataFrame(index=order_to_use, columns=[])
+
+    # Variant name mapping (model x V# -> actual variant string)
+    if max_rank > 0:
+        variant_names = (
+            df_sorted.drop_duplicates(subset=["model", "variant_pos"]).set_index(["model", "variant_pos"])["variant"].unstack()
         ).reindex(order_to_use)
-    )
-    variant_cols = list(df_variants.columns)
+        # Ensure all V# columns present in mapping
+        for v in variant_list:
+            if v not in variant_names.columns:
+                variant_names[v] = ""
+        variant_names = variant_names[variant_list]
+    else:
+        variant_names = pd.DataFrame(index=order_to_use, columns=[])
 
-    # --- Merge tables ---
-    merged_df = price_range_df.merge(
-        df_variants.reset_index(), on="model", how="left"
-    )
+    # --- Build merged dataframe for the main sheet ---
+    merged_df = price_range_df.merge(df_variants.reset_index(), on="model", how="left")
 
-    # --- Create workbook & single sheet ---
+    # Guarantee columns order: Model, Min, Max, Delta, V1, V2, ...
+    output_cols = ["model", "min_price_lakh", "max_price_lakh", "Delta"] + variant_list
+
+    # Create labels (strings) that combine variant name and price per model+V# -> e.g. "LXi (4.23)"
+    labels_df = pd.DataFrame(index=order_to_use, columns=variant_list)
+    for m in order_to_use:
+        for v in variant_list:
+            price = np.nan
+            if v in df_variants.columns and m in df_variants.index:
+                price = df_variants.loc[m, v]
+            vname = ""
+            if (v in variant_names.columns) and (m in variant_names.index):
+                vname = variant_names.loc[m, v]
+            if pd.notna(price) and vname != "":
+                labels_df.loc[m, v] = f"{vname} ({price:.2f})"
+            elif pd.notna(price):
+                labels_df.loc[m, v] = f"{price:.2f}"
+            else:
+                labels_df.loc[m, v] = ""
+
+    # --- Create Excel workbook ---
+    import xlsxwriter
+    output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {"in_memory": True})
+
+    # If the above fails because pandas internal point changes, fallback to xlsxwriter directly:
+    try:
+        pass
+    except Exception:
+
+        workbook = xlsxwriter.Workbook(output, {"in_memory": True})
+
+    # Add sheets
     ws = workbook.add_worksheet("Price_Range")
+    ws_map = workbook.add_worksheet("Variant_Mapping")
+    ws_labels = workbook.add_worksheet("Labels")
 
-    # Formats
-    fmt_header = workbook.add_format(
-        {"bold": True, "bg_color": "#D9E1F2", "border": 1}
-    )
-    fmt_num = workbook.add_format({"num_format": "(0.00)", "border": 1})
+    # --- Formats ---
+    fmt_header = workbook.add_format({"bold": True, "bg_color": "#D9E1F2", "border": 1})
+    fmt_num = workbook.add_format({"num_format": "0.00", "border": 1})
     fmt_text = workbook.add_format({"border": 1})
+    fmt_model = workbook.add_format({"bold": True, "border": 1})
 
-    # --- Write merged table ---
-    headers = ["Model", "Min Price (Lakh)", "Max Price (Lakh)", "Delta (Lakh)"] + variant_cols
+    # --- Write the Price_Range sheet header ---
+    headers = ["Model", "Min Price (Lakh)", "Max Price (Lakh)", "Delta (Lakh)"] + variant_list
     ws.write_row(0, 0, headers, fmt_header)
 
-    for r, row in enumerate(merged_df.itertuples(index=False), start=1):
-        ws.write(r, 0, row.model, fmt_text)
-        ws.write_number(r, 1, float(row.min_price_lakh), fmt_num)
-        ws.write_number(r, 2, float(row.max_price_lakh), fmt_num)
-        # Delta = Max - Min
-        ws.write_formula(r, 3, f"=C{r+1}-B{r+1}", fmt_num)
-        # Variants
-        for c, val in enumerate(row[3:], start=4):  # offset by 4 cols
+    # Ensure merged_df has variant columns in the correct order (adds missing columns)
+    for v in variant_list:
+        if v not in merged_df.columns:
+            merged_df[v] = np.nan
+
+    # Write rows
+    for row_idx, model in enumerate(price_range_df["model"].tolist()):
+        # merged_df rows correspond to model order
+        row = merged_df.iloc[row_idx]
+        excel_row = row_idx + 1  # 0-based for xlsxwriter; header is row 0
+
+        # Model
+        ws.write(row_idx + 1, 0, row["model"], fmt_model)
+        # Min / Max
+        min_price = row["min_price_lakh"]
+        max_price = row["max_price_lakh"]
+        if pd.notna(min_price):
+            ws.write_number(excel_row, 1, float(min_price), fmt_num)
+        else:
+            ws.write(excel_row, 1, "", fmt_text)
+        if pd.notna(max_price):
+            ws.write_number(excel_row, 2, float(max_price), fmt_num)
+        else:
+            ws.write(excel_row, 2, "", fmt_text)
+
+        # Delta formula: =C{row}-B{row} (Excel rows start at 1)
+        ws.write_formula(excel_row, 3, f"=C{excel_row+1}-B{excel_row+1}", fmt_num)
+
+        # Variant prices V1..Vn placed starting at column index 4 -> Excel col E
+        for j, v in enumerate(variant_list):
+            col_idx = 4 + j
+            val = row.get(v, None)
             if pd.notna(val):
-                ws.write_number(r, c, float(val), fmt_num)
+                ws.write_number(excel_row, col_idx, float(val), fmt_num)
+            else:
+                ws.write(excel_row, col_idx, "", fmt_text)
 
-    max_row = len(merged_df)
+    max_row = len(merged_df)  # number of data rows
 
-    # Autofit columns
-    ws.set_column(0, 0, 15)
-    ws.set_column(1, len(headers) - 1, 9)
+    # Autofit: set widths
+    ws.set_column(0, 0, 22)  # Model
+    ws.set_column(1, 3, 14)  # Min, Max, Delta
+    if max_rank > 0:
+        ws.set_column(4, 4 + max_rank - 1, 12)  # V1..Vn
 
-    # --- Chart ---
+    # --- Write Variant_Mapping sheet ---
+    map_headers = ["Model"] + variant_list
+    ws_map.write_row(0, 0, map_headers, fmt_header)
+    for i, m in enumerate(order_to_use, start=1):
+        ws_map.write(i, 0, m, fmt_text)
+        if max_rank > 0:
+            for j, v in enumerate(variant_list, start=1):
+                name = ""
+                if (m in variant_names.index) and (v in variant_names.columns):
+                    name = variant_names.loc[m, v] if pd.notna(variant_names.loc[m, v]) else ""
+                ws_map.write(i, j, name, fmt_text)
+
+    # --- Write Labels sheet (Model | V1_label | V2_label | ...) ---
+    labels_headers = ["Model"] + [f"{v}_label" for v in variant_list]
+    ws_labels.write_row(0, 0, labels_headers, fmt_header)
+    for i, m in enumerate(order_to_use, start=1):
+        ws_labels.write(i, 0, m, fmt_text)
+        for j, v in enumerate(variant_list, start=1):
+            lbl = labels_df.loc[m, v] if (m in labels_df.index and v in labels_df.columns) else ""
+            ws_labels.write(i, j, lbl, fmt_text)
+
+    # --- Build chart ---
+    # Column chart (stacked) for Min + Delta, and line chart for variant points with custom labels
     col_chart = workbook.add_chart({"type": "column", "subtype": "stacked"})
 
-    # Min price transparent
-    col_chart.add_series({
-        "name": "Min Price",
-        "categories": ["Price_Range", 1, 0, max_row, 0],
-        "values": ["Price_Range", 1, 1, max_row, 1],
-        "fill": {"none": True},
-        "border": {"none": True},
-        "line": {"none": True},
-        "shadow": {"blur": 0},
-        "gap": 200,
-    })
-
-    # Delta visible
-    col_chart.add_series({
-        "name": "Price Range",
-        "categories": ["Price_Range", 1, 0, max_row, 0],
-        "values": ["Price_Range", 1, 3, max_row, 3],
-        "fill": {"color": "#ADD8E6"},
-        "border": {"none": True},
-        "gap": 200,
-    })
-
-    # Variants as markers
-    line_chart = workbook.add_chart({"type": "line"})
-    for idx_col, variant in enumerate(variant_cols, start=4):  # start at col 4
-        line_chart.add_series({
-            "name": variant,
+    # Min price series (transparent)
+    if max_row > 0:
+        col_chart.add_series({
+            "name": "Min Price",
             "categories": ["Price_Range", 1, 0, max_row, 0],
-            "values": ["Price_Range", 1, idx_col, max_row, idx_col],
-            "marker": {
-                "type": "circle",
-                "size": 7,
-                "border": {"color": "white"},
-                "fill": {"color": "#00008B"},
-            },
+            "values": ["Price_Range", 1, 1, max_row, 1],
+            "fill": {"none": True},
+            "border": {"none": True},
             "line": {"none": True},
-            "data_labels": {
-                "value": True,
-                "series_name": True,
-                "category": False,
-                "position": "right",
-                "font": {"size": 10, "bold": True, "color": "#333333"},
-                "separator": " ",
-            },
+            "shadow": {"blur": 0},
+            "gap": 200,
         })
 
-    col_chart.combine(line_chart)
+        # Delta series (visible)
+        col_chart.add_series({
+            "name": "Price Range",
+            "categories": ["Price_Range", 1, 0, max_row, 0],
+            "values": ["Price_Range", 1, 3, max_row, 3],
+            "fill": {"color": "#ADD8E6"},
+            "border": {"none": True},
+            "gap": 200,
+        })
 
-    # --- Adjust Y axis scale ---
-    max_price = price_range_df["max_price_lakh"].max()
-    y_max = (max_price * 1.1)
+        # Line chart for variants (markers) with custom per-point labels taken from Labels sheet
+        line_chart = workbook.add_chart({"type": "scatter"})
 
-    col_chart.set_title({
-        "name": "Price Range per Model (₹ Lakhs)",
-        "name_font": {"bold": True, "size": 12},
-    })
-    col_chart.set_x_axis({"name": "Model", "label_position": "low"})
-    col_chart.set_y_axis({
-        "name": "Price (₹ Lakhs)",
-        "num_format": "₹0.0",
-        "major_gridlines": {"visible": True, "line": {"color": "#D9D9D9"}},
-        "min": 0,
-        "max": y_max,
-    })
-    col_chart.set_legend({"none": True})
-    col_chart.set_size({"width": 1000, "height": 520})
-    col_chart.set_style(0)
 
-    # Insert chart
-    ws.insert_chart("F2", col_chart, {"x_scale": 1.5, "y_scale": 1.1})
+        for j, v in enumerate(variant_list):
+            series_col = 4 + j
+            # Build custom_labels list referencing the Labels sheet cells B2.. etc
+            custom_labels = []
+            # Labels sheet has header row at 0, data starts at row 1 -> excel rows start at 2
+            label_col_idx = 1 + j  # Labels sheet: Model at col 0, V1_label at col1...
+            label_col_letter = _col_idx_to_excel(label_col_idx)
+            for r in range(max_row):
+                excel_row_num = r + 2  # row 2.. (Excel numbering)
+                lbl = labels_df.iloc[r, j]
+                if lbl and str(lbl).strip() != "":
+                    custom_labels.append({"value": f"=Labels!${label_col_letter}${excel_row_num}"})
+                else:
+                    custom_labels.append(None)
+
+            # If the price column might be entirely empty for this V#, skip adding the series
+            values_exist = any(pd.notna(df_variants.loc[m, v]) for m in df_variants.index if v in df_variants.columns)
+            if not values_exist:
+                continue
+
+            line_chart.add_series({
+                "name": v,
+                "categories": ["Price_Range", 1, 0, max_row, 0],
+                "values": ["Price_Range", 1, series_col, max_row, series_col],
+                "marker": {"type": "circle", "size": 7, "border": {"color": "white"},"fill": {"color": "#00008B"},},
+                "line": {"none": True},
+                "data_labels": {"value": True, "custom": custom_labels, "position": "right", "font": {"size": 12}},
+            })
+
+        # Combine charts
+        col_chart.combine(line_chart)
+
+        # Chart formatting
+        max_price = price_range_df["max_price_lakh"].max() if not price_range_df["max_price_lakh"].empty else 0
+        y_max = max_price * 1.1 if max_price and not math.isnan(max_price) else 1
+
+        col_chart.set_title({"name": "Price Range per Model (₹ Lakhs)", "name_font": {"bold": True, "size": 14}})
+        col_chart.set_x_axis({"name": "Model", "label_position": "low","name_font": {"size": 12, "bold": True}, "num_font": {"size": 11}})
+        col_chart.set_y_axis({"name": "Price (₹ Lakhs)","num_format": "₹0.0","min": 0,"max": y_max,"name_font": {"size": 12, "bold": True},"num_font": {"size": 11}})
+        col_chart.set_size({"width": 1000, "height": 520})
+        ws.insert_chart("F2", col_chart, {"x_scale": 1.4, "y_scale": 1.05})
 
     workbook.close()
     output.seek(0)
     return output.getvalue()
-
-
 
 excel_data = to_excel_price_range_chart(df_filtered, order_to_use)
 st.download_button(
