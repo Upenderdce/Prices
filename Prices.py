@@ -9,6 +9,8 @@ import streamlit_sortables as sortables
 import initialization
 import scraping
 import theme
+import io
+import xlsxwriter
 
 st.set_page_config(page_title="Car Price Dashboard", layout="wide")
 
@@ -566,9 +568,7 @@ with tab4:
             st.success("✅ Manual entry deleted.")
             st.rerun()
 
-import io
-import pandas as pd
-import xlsxwriter
+
 
 def to_excel_price_range_chart(df_filtered, order_to_use):
     output = io.BytesIO()
