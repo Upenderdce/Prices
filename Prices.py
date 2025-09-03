@@ -50,7 +50,7 @@ brands_available = sorted(df["brand"].unique())
 selected_brands = st.sidebar.multiselect("Brand(s)", options=brands_available, default=[])
 
 models_available = sorted(df[df["brand"].isin(selected_brands)]["model"].unique())
-selected_models = st.sidebar.multiselect("Model(s)", options=models_available, default=models_available)
+selected_models = st.sidebar.multiselect("Model(s)", options=models_available, default=[])
 
 fuel_available = sorted(df[df["brand"].isin(selected_brands) & df["model"].isin(selected_models)]["fuel"].unique())
 selected_fuel = st.sidebar.multiselect("Fuel(s)", options=fuel_available, default=fuel_available)
@@ -710,15 +710,18 @@ def to_excel_price_range_chart(df_filtered: pd.DataFrame, order_to_use: list):
         # Model
         ws.write(row_idx + 1, 0, row["model"], fmt_model)
         # Min / Max
-        min_price = row["min_price_lakh"]
-        max_price = row["max_price_lakh"]
-        if pd.notna(min_price):
-            ws.write_number(excel_row, 1, float(min_price), fmt_num)
+        # Min / Max based on variant columns
+        if max_rank > 0:
+            first_variant_col = _col_idx_to_excel(4)  # "E" for V1
+            last_variant_col = _col_idx_to_excel(4 + max_rank - 1)
+            excel_row_num = excel_row + 1  # Excel rows start at 1
+
+            ws.write_formula(excel_row, 1,
+                             f"=MIN({first_variant_col}{excel_row_num}:{last_variant_col}{excel_row_num})", fmt_num)
+            ws.write_formula(excel_row, 2,
+                             f"=MAX({first_variant_col}{excel_row_num}:{last_variant_col}{excel_row_num})", fmt_num)
         else:
             ws.write(excel_row, 1, "", fmt_text)
-        if pd.notna(max_price):
-            ws.write_number(excel_row, 2, float(max_price), fmt_num)
-        else:
             ws.write(excel_row, 2, "", fmt_text)
 
         # Delta formula: =C{row}-B{row} (Excel rows start at 1)
@@ -759,8 +762,12 @@ def to_excel_price_range_chart(df_filtered: pd.DataFrame, order_to_use: list):
     for i, m in enumerate(order_to_use, start=1):
         ws_labels.write(i, 0, m, fmt_text)
         for j, v in enumerate(variant_list, start=1):
-            lbl = labels_df.loc[m, v] if (m in labels_df.index and v in labels_df.columns) else ""
-            ws_labels.write(i, j, lbl, fmt_text)
+            # Dynamic formula for labels: "VariantName (Price)"
+            variant_name_cell = f"Variant_Mapping!{_col_idx_to_excel(j)}{i + 1}"  # Variant name
+            price_cell = f"Price_Range!{_col_idx_to_excel(4 + j - 1)}{i + 1}"  # Variant price
+
+            formula = f'=IF({price_cell}="","",{variant_name_cell} & " (" & TEXT({price_cell},"0.00") & ")")'
+            ws_labels.write_formula(i, j, formula, fmt_text)
 
     # --- Build chart ---
     # Column chart (stacked) for Min + Delta, and line chart for variant points with custom labels
@@ -833,6 +840,9 @@ def to_excel_price_range_chart(df_filtered: pd.DataFrame, order_to_use: list):
         col_chart.set_x_axis({"name": "Model", "label_position": "low","name_font": {"size": 12, "bold": True}, "num_font": {"size": 11}})
         col_chart.set_y_axis({"name": "Price (₹ Lakhs)","num_format": "₹0.0","min": 0,"max": y_max,"name_font": {"size": 12, "bold": True},"num_font": {"size": 11}})
         col_chart.set_size({"width": 1000, "height": 520})
+        col_chart.set_legend({"none": True})
+
+
         ws.insert_chart("F2", col_chart, {"x_scale": 1.4, "y_scale": 1.05})
 
     workbook.close()
