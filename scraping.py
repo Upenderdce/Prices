@@ -247,7 +247,6 @@ def _maruti_fetch_arena_model(modelCd, modelName):
                 })
     except:
         pass
-    print(rows)
     return rows
 
 def _maruti_fetch_nexa_model(modelCd, modelName):
@@ -379,7 +378,6 @@ def _hyundai_fetch_one(model):
             variants = []
 
         for v in variants:
-            print(v)
             price_rupees = _parse_price_rupees(v.get("price"))
             fuel = v.get("fuelType", "")
             if "CNG" in fuel:  # covers "Bi-Fuel CNG", "CNG", etc.
@@ -467,7 +465,6 @@ def _mahindra_fetch_one(model):
 
     for html_snippet in variant_html_list:
         soup = BeautifulSoup(html_snippet, "html.parser")
-        print(soup.prettify())
         input_tag = soup.find("input", {"class": "js-radio"})
         variant_name = (
             input_tag.attrs.get("data-variantName") or
@@ -611,95 +608,85 @@ def fetch_toyota_prices(dealer_id=704):
 # KIA SCRAPER
 # =====================
 
-KIA_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+KIA_API = "https://www.kia.com/api/kia2_in"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
 }
 
-KIA_HOME = "https://www.kia.com/in/home.html"
-KIA_URL = "https://www.kia.com"
-
+# ----------------------------
+# Clean Variant Name
+# ----------------------------
+def clean_variant(name: str) -> str:
+    name = re.sub(r"^Kia\s+\w+\s+", "", name, flags=re.I)
+    name = re.sub(r"\b(?:Smartstream|CRDI VGT?|T-?GDI|[DG]\d\.\d\w*|\d+\s?(?:MT|AT|DCT|iMT|IVT))\b", "", name, flags=re.I)
+    return name.split("|")[0].strip()
 
 # ----------------------------
-# Function 1: Fetch all Kia models
+# Normalize Transmission
 # ----------------------------
-def fetch_kia_models():
-    """Fetch all Kia models (name + URL)."""
-    resp = requests.get(KIA_HOME, headers=KIA_HEADERS)
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    models = []
-    for li in soup.select(".gnb-item.tier-vehicles.has-d2 ul.d2-list > li.d2"):
-        a_tag = li.select_one("a.d2-a > span.text")
-        href_tag = li.select_one("a.d2-a")
-        if a_tag and a_tag.get_text(strip=True) and href_tag:
-            models.append({
-                "name": a_tag.get_text(strip=True),
-                "url": KIA_URL + href_tag['href']
-            })
-    return models
-
+def normalize_trans(name: str) -> str:
+    name = name.upper()
+    if "IMT" in name:
+        return "iMT"
+    if "MT" in name:
+        return "MT"
+    if any(x in name for x in ["AT", "DCT", "IVT"]):
+        return "AT"
+    return name or "NA"
 
 # ----------------------------
-# Function 2: Fetch variants & prices for a model
+# Fetch Models
 # ----------------------------
-def _kia_prices(model_name, model_url):
-    """Fetch variant, fuel, transmission, and price for a Kia model."""
-    showroom_url = model_url.replace(".html", "/showroom.html")
-    resp = requests.get(showroom_url, headers=KIA_HEADERS)
-    soup = BeautifulSoup(resp.text, "html.parser")
+def fetch_models(state="DL", city="N10"):
+    url = f"{KIA_API}/configure.getModelList.do"
+    resp = requests.post(url, headers=HEADERS, data={"stateCode": state, "cityCode": city})
+    return [{"name": m["modelName"], "code": m["modelCode"]} for m in resp.json().get("data", [])]
+
+# ----------------------------
+# Fetch Variants for One Model
+# ----------------------------
+def fetch_variants(model, state="DL", city="N10"):
+    url = f"{KIA_API}/configure.getVrntList.do"
+    resp = requests.get(f"{url}?modelCode={model['code']}&stateCode={state}&cityCode={city}", headers=HEADERS)
+    data = resp.json().get("data", {})
+
+    engines = {e["dmsEngineCode"]: (e["engineName"], e["fuelType"]) for e in data.get("engines", [])}
+    trans = {t["dmsTmdtCode"]: t["tmName"] for t in data.get("transmissions", [])}
 
     rows = []
-    for trim_card in soup.select("section.trim-card"):
-        # Variant name
-        variant_tag = trim_card.select_one("h3.h4")
-        variant = variant_tag.get_text(strip=True) if variant_tag else ""
-
-        # Fuel and transmission info (if present)
-        details_tag = trim_card.select_one("ul.spec-list li")
-        fuel, trans = "", ""
-        if details_tag:
-            details_text = details_tag.get_text(strip=True)
-            # Simple heuristic: split by '/' or known keywords
-            parts = details_text.split('/')
-            if len(parts) >= 2:
-                fuel = parts[0].strip()
-                trans = parts[1].strip()
-            elif len(parts) == 1:
-                fuel = parts[0].strip()
-
-        # Price
-        price_tag = trim_card.select_one("span.price script")
-        price = None
-        if price_tag and price_tag.string:
-            match = re.search(r"ComUtils\.currency\((\d+)\)", price_tag.string)
-            if match:
-                price = int(match.group(1))
-
-        rows.append({
-            "Brand": "Kia",
-            "Model": model_name,
-            "Variant": variant,
-            "Fuel": fuel,
-            "Transmission": trans,
-            "Price": price
-        })
+    for v in data.get("variants", []):
+        price = v.get("price", {}).get("M", {}).get("intraExsrPrice", 0)
+        if price > 0:
+            ocn = v.get("dmsMcOcn", "").split()
+            code = ocn[-2] if len(ocn) >= 2 else ""
+            engine_name, fuel = engines.get(code[4:-1], ("NA", "NA"))
+            raw_trans = trans.get(code[-1:], "NA")
+            transmission = normalize_trans(raw_trans)
+            rows.append({
+                "Brand": "Kia",
+                "Model": model["name"],
+                "Variant": clean_variant(v.get("variantName", "")),
+                "Fuel": fuel,
+                "Transmission": transmission,
+                "Price": price
+            })
     return rows
 
-
 # ----------------------------
-# Function 3: Combine everything
+# Fast Parallel Fetch
 # ----------------------------
-def fetch_kia_prices():
+def fetch_kia_prices(state="DL", city="N10", workers=8):
+    models = fetch_models(state, city)
     all_data = []
-    models = fetch_kia_models()
-    for m in models:
-        model_name, model_url = m["name"], m["url"]
-        try:
-            prices = _kia_prices(model_name, model_url)
-            all_data.extend(prices)
-        except Exception as e:
-            print(f"❌ Failed for {model_name}: {e}")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(fetch_variants, m, state, city): m for m in models}
+        for fut in as_completed(futures):
+            try:
+                all_data.extend(fut.result())
+            except Exception as e:
+                print(f"❌ Failed for {futures[fut]['name']}: {e}")
     return all_data
 
 
