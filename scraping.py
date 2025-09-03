@@ -620,6 +620,7 @@ HEADERS = {
 def clean_variant(name: str) -> str:
     name = re.sub(r"^Kia\s+\w+\s+", "", name, flags=re.I)
     name = re.sub(r"\b(?:Smartstream|CRDI VGT?|T-?GDI|[DG]\d\.\d\w*|\d+\s?(?:MT|AT|DCT|iMT|IVT))\b", "", name, flags=re.I)
+    name = re.sub(r"\s*-\s*", " ", name)
     return name.split("|")[0].strip()
 
 # ----------------------------
