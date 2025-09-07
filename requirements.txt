@@ -8,6 +8,6 @@ plotly>=5.20.0
 lxml>=4.9.0
 html5lib>=1.1
 XlsxWriter==3.2.0
-groq==0.0.4
+groq==0.31.1
 PyPDF2==3.0.1
 
