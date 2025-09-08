@@ -11,4 +11,4 @@ jobs:
     steps:
       - name: Curl Ping
         run: |
-          curl -s https://your-app-name.streamlit.app > /dev/null
+          curl -s https://pricespy-jx857shv65uogjq44k8vj3.streamlit.app > /dev/null
