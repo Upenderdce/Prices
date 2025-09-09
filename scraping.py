@@ -1,10 +1,16 @@
 import requests
-import itertools
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pandas as pd
+
+def remove_duplicates(prices_list):
+    df = pd.DataFrame(prices_list)
+    df = df.drop_duplicates(subset=["Brand", "Model", "Variant", "Fuel", "Transmission", "Price"])
+    df = df.reset_index(drop=True)
+    return df.to_dict(orient="records")
 
 # =====================
 # CONFIG
@@ -45,86 +51,124 @@ def _parse_price_rupees(v):
 # =====================
 # TATA SCRAPER
 # =====================
+import asyncio
+import aiohttp
+import itertools
+
+# =============================
+# Config
+# =============================
 TATA_MODEL_CONFIGS = [
-    {
-        "name": "Nexon",
-        "url": "https://cars.tatamotors.com/nexon/ice/price.getpricefilteredresult.json",
-        "modelId": "1-TGW7UPH",
-        "parentProductId": "1-S3YJYTJ",
-        "referer": "https://cars.tatamotors.com/nexon/ice/price.html"
-    },
-    {
-        "name": "Tiago",
-        "url": "https://cars.tatamotors.com/tiago/ice/price.getpricefilteredresult.json",
-        "modelId": "1-FFSXOSX",
-        "parentProductId": "1-DR4I0XM",
-        "referer": "https://cars.tatamotors.com/tiago/ice/price.html"
-    },
-    {
-        "name": "Altroz",
-        "url": "https://cars.tatamotors.com/altroz/ice/price.getpricefilteredresult.json",
-        "modelId": "1-1NR5UKP5",
-        "parentProductId": "1-1MJPLCOH",
-        "referer": "https://cars.tatamotors.com/altroz/ice/price.html"
-    },
-    {
-        "name": "Curvv",
-        "url": "https://cars.tatamotors.com/curvv/ice/price.getpricefilteredresult.json",
-        "modelId": "CURVV_MODEL_ID",
-        "parentProductId": "CURVV_PARENT_ID",
-        "referer": "https://cars.tatamotors.com/curvv/ice/price.html"
-    },
-    {
-        "name": "Tigor",
-        "url": "https://cars.tatamotors.com/tigor/ice/price.getpricefilteredresult.json",
-        "modelId": "TIGOR_MODEL_ID",
-        "parentProductId": "TIGOR_PARENT_ID",
-        "referer": "https://cars.tatamotors.com/tigor/ice/price.html"
-    },
-    {
-        "name": "Punch",
-        "url": "https://cars.tatamotors.com/punch/ice/price.getpricefilteredresult.json",
-        "modelId": "PUNCH_MODEL_ID",
-        "parentProductId": "PUNCH_PARENT_ID",
-        "referer": "https://cars.tatamotors.com/punch/ice/price.html"
-    },
-    {
-        "name": "Harrier",
-        "url": "https://cars.tatamotors.com/harrier/ice/price.getpricefilteredresult.json",
-        "modelId": "5-20YZDK9O",
-        "parentProductId": "1-12DWLRE2",
-        "referer": "https://cars.tatamotors.com/harrier/ice/price.html"
-    },
-    {
-        "name": "Safari",
-        "url": "https://cars.tatamotors.com/safari/ice/price.getpricefilteredresult.json",
-        "modelId": "SAFARI_MODEL_ID",
-        "parentProductId": "SAFARI_PARENT_ID",
-        "referer": "https://cars.tatamotors.com/safari/ice/price.html"
-    }
+    {"name": "Nexon", "modelId": "1-TGW7UPH", "parentProductId": "1-S3YJYTJ", "baseUrl": "https://cars.tatamotors.com/nexon/ice"},
+    {"name": "Tiago", "modelId": "1-FFSXOSX", "parentProductId": "1-DR4I0XM", "baseUrl": "https://cars.tatamotors.com/tiago/ice"},
+    {"name": "Altroz", "modelId": "1-1NR5UKP5", "parentProductId": "1-1MJPLCOH", "baseUrl": "https://cars.tatamotors.com/altroz/ice"},
+    {"name": "Harrier", "modelId": "5-20YZDK9O", "parentProductId": "1-12DWLRE2", "baseUrl": "https://cars.tatamotors.com/harrier/ice"},
+    {"name": "Curvv", "modelId": "1-1A9U7P1Z", "parentProductId": "1-1U4U0U0N", "baseUrl": "https://cars.tatamotors.com/curvv/ice"},
+    {"name": "Safari", "modelId": "5-20YWEGYC", "parentProductId": "1-12DXM1K4", "baseUrl": "https://cars.tatamotors.com/safari/ice"},
+    {"name": "Punch", "modelId": "1-11Z2ID06", "parentProductId": "1-13T1XGN8", "baseUrl": "https://cars.tatamotors.com/punch/ice"},
+    {"name": "Tigor", "modelId": "1-13LP1VGC", "parentProductId": "1-13LP1VGE", "baseUrl": "https://cars.tatamotors.com/tigor/ice"},
 ]
 
+
 TATA_EDITION_LIST = ["standard"]
-TATA_FUEL_LIST = ["1-D1MGNW9", "1-ID-1738", "1-ID-267","1-ID-268"]   # Petrol / Diesel / CNG
-TATA_TRANS_LIST = ["5-251EY13B", "5-251EY13H", "5-251EY13J", "MT", "AMT", "DCA", "DCT"]
-TATA_PRICE_RANGE = ["₹5L", "₹25L"]
+TATA_PRICE_RANGE = ["₹5L", "₹30L"]
 
 FUEL_MAP = {"1-D1MGNW9": "CNG", "1-ID-1738": "Diesel", "1-ID-267": "Petrol", "1-ID-268": "CNG"}
-TRANS_MAP = {"5-251EY13B": "MT", "5-251EY13H": "AMT", "5-251EY13J": "AT","DCA":"AT", "DCT":"AT"}
+TRANS_MAP = {"5-251EY13B": "MT", "5-251EY13H": "AMT", "5-251EY13J": "AT", "DCA": "AT", "DCT": "AT"}
 
 TATA_HEADERS_TEMPLATE = {
     "accept": "*/*",
-    "content-type": "application/json",
     "origin": "https://cars.tatamotors.com",
     "referer": None,
-    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
     "x-requested-with": "XMLHttpRequest",
 }
 TATA_COOKIES = {"at_check": "true"}
+FILTER_CACHE = {}
+RESPONSE_CACHE = {}  # Cache for API responses
 
-def _tata_fetch_one(model_cfg, edition, fuel, trans):
+# =============================
+# Cache Management
+# =============================
+def clear_tata_caches():
+    """Clear all Tata-related caches to force fresh data fetch"""
+    global FILTER_CACHE, RESPONSE_CACHE
+    FILTER_CACHE.clear()
+    RESPONSE_CACHE.clear()
+    print("🧹 Cleared Tata caches")
+
+def get_cache_stats():
+    """Get cache statistics"""
+    return {
+        "filter_cache_size": len(FILTER_CACHE),
+        "response_cache_size": len(RESPONSE_CACHE)
+    }
+
+# =============================
+# Helpers
+# =============================
+def _parse_tata_price_rupees(price_str):
+    if not price_str:
+        return None
+    digits = re.sub(r"[^\d]", "", price_str)
+    return int(digits) if digits else None
+
+def _clean_variant_name(model_name, raw_name):
+    v = (raw_name or "").replace(model_name, "").replace(model_name.upper(), "")
+    v = v.replace("-", " ")
+    for fuel_word in ["Petrol/Ethanol", "Petrol", "Diesel", "PETROL", "DIESEL"]:
+        v = v.replace(fuel_word, "")
+    v = re.sub(r"\b(5MT|MT|Standard|New)\b", "", v)
+    v = re.sub(r"\b(Bi[- ]?fuel.*|BIFUEL.*)\b", "", v, flags=re.IGNORECASE)
+    v = re.sub(r"(,\s*)?CNG\b", " CNG", v, flags=re.IGNORECASE)
+    v = re.sub(r"\b(CNG)(\s*CNG)+\b", r"\1", v, flags=re.IGNORECASE)
+    v = re.sub(r"\s+,", ",", v)
+    v = re.sub(r"\s{2,}", " ", v)
+    return v.strip(" ,")
+
+# =============================
+# Async fetch functions
+# =============================
+async def _tata_get_filters(session, model_cfg):
+    if model_cfg["name"] in FILTER_CACHE:
+        return FILTER_CACHE[model_cfg["name"]]
+
+    url = f"{model_cfg['baseUrl']}/price.getpricefilteroptions.json"
     headers = TATA_HEADERS_TEMPLATE.copy()
-    headers["referer"] = model_cfg["referer"]
+    headers["referer"] = f"{model_cfg['baseUrl']}/price.html"
+    headers["content-type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+
+    payload = {
+        "vehicleCategory": "TMPC",
+        "modelId": model_cfg["modelId"],
+        "parentProductId": model_cfg["parentProductId"],
+        "cityId": "India-DL-DELHI"
+    }
+
+    async with session.post(url, headers=headers, cookies=TATA_COOKIES, data=payload) as resp:
+        data = await resp.json()
+
+    filter_map = {"fuel_type": {}, "transmission_type": {}, "edition": {}}
+    for opt in data.get("results", {}).get("filterOptionsList", []):
+        ftype = opt.get("filterType")
+        if ftype in filter_map:
+            for item in opt.get("filterOption", []):
+                filter_map[ftype][item["optionId"]] = item["optionLabel"]
+
+    FILTER_CACHE[model_cfg["name"]] = filter_map
+    return filter_map
+
+async def _tata_fetch_one(session, model_cfg, edition, fuel, trans, max_retries=3):
+    # Create cache key from request parameters
+    cache_key = f"{model_cfg['modelId']}_{edition}_{fuel}_{trans}"
+    if cache_key in RESPONSE_CACHE:
+        return RESPONSE_CACHE[cache_key]
+    
+    headers = TATA_HEADERS_TEMPLATE.copy()
+    headers["referer"] = f"{model_cfg['baseUrl']}/price.html"
+    headers["content-type"] = "application/json"
+
     payload = {
         "vehicleCategory": "TMPC",
         "modelId": model_cfg["modelId"],
@@ -137,50 +181,37 @@ def _tata_fetch_one(model_cfg, edition, fuel, trans):
             {"filterType": "price", "values": TATA_PRICE_RANGE},
         ]
     }
-    try:
-        resp = session.post(model_cfg["url"], headers=headers, cookies=TATA_COOKIES, json=payload, timeout=20)
-        data = resp.json()
-    except:
-        return []
+
+    url = f"{model_cfg['baseUrl']}/price.getpricefilteredresult.json"
+    
+    for attempt in range(max_retries):
+        try:
+            async with session.post(url, headers=headers, cookies=TATA_COOKIES, json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    break
+                elif resp.status in [429, 503, 504]:  # Rate limit or server errors
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.5 * (2 ** attempt))  # Exponential backoff
+                        continue
+                else:
+                    print(f"HTTP {resp.status} for {model_cfg['name']} {fuel}/{trans}")
+                    return []
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            if attempt < max_retries - 1:
+                await asyncio.sleep(0.2 * (2 ** attempt))
+                continue
+            else:
+                print(f"Error fetching {model_cfg['name']} {fuel}/{trans}: {e}")
+                return []
 
     variants = data.get("results", {}).get("variantPriceFeatures", []) or []
     out = []
     for v in variants:
-        price_raw = v.get("priceDetails", {}).get("originalPrice")
-        price = _parse_price_rupees(price_raw)
+        price = _parse_tata_price_rupees(v.get("priceDetails", {}).get("originalPrice"))
         if not price:
             continue
-        variant_name = (
-            v.get("variantLabel", "")
-            .replace(model_cfg["name"], "")  # remove model name (Curvv, Nexon, etc.)
-            .replace(model_cfg["name"].upper(), "")  # remove uppercase model name
-            .replace("-", " ")  # replace hyphens with spaces
-            .strip()
-        )
-
-        # Remove fuel info
-        for fuel_word in ["Petrol/Ethanol", "Petrol", "Diesel","PETROL", "DIESEL" ]:
-            variant_name = variant_name.replace(fuel_word, "")
-
-        # Remove "Standard"
-        variant_name = variant_name.replace("Standard", "")
-        # Remove MT / 5MT
-        variant_name = re.sub(r"\b(5MT|MT|New)\b", "", variant_name)
-
-        # Remove Bi-fuel tags
-        variant_name = re.sub(r"\b(Bi[- ]?fuel.*|BIFUEL.*)\b", "", variant_name, flags=re.IGNORECASE)
-
-        # Keep only ONE CNG
-        variant_name = re.sub(r"(,\s*)?CNG\b", " CNG", variant_name, flags=re.IGNORECASE)
-
-        # Remove duplicate CNG words if repeated
-        variant_name = re.sub(r"\b(CNG)(\s*CNG)+\b", r"\1", variant_name, flags=re.IGNORECASE)
-
-        # Cleanup commas and spaces
-        variant_name = re.sub(r"\s+,", ",", variant_name)  # tidy commas
-        variant_name = re.sub(r"\s{2,}", " ", variant_name)  # collapse spaces
-        variant_name = variant_name.strip(" ,")
-
+        variant_name = _clean_variant_name(model_cfg["name"], v.get("variantLabel", ""))
         out.append({
             "Brand": "Tata",
             "Model": model_cfg["name"],
@@ -189,22 +220,77 @@ def _tata_fetch_one(model_cfg, edition, fuel, trans):
             "Variant": variant_name,
             "Price": price
         })
-
+    
+    # Cache successful response
+    RESPONSE_CACHE[cache_key] = out
     return out
 
-def fetch_tata_prices_parallel():
+# =============================
+# Main async fetch
+# =============================
+async def fetch_tata_prices_async():
+    import time
+    start_time = time.time()
     rows = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = [
-            ex.submit(_tata_fetch_one, cfg, edition, fuel, trans)
-            for cfg in TATA_MODEL_CONFIGS
-            for edition, fuel, trans in itertools.product(TATA_EDITION_LIST, TATA_FUEL_LIST, TATA_TRANS_LIST)
-        ]
-        for f in as_completed(futures):
-            r = f.result()
+    print(f"🚀 Starting Tata scraping at {time.strftime('%H:%M:%S')}...")
+    # Optimize connector for higher throughput
+    connector = aiohttp.TCPConnector(
+        ssl=False,
+        limit=100,  # Total connection pool size
+        limit_per_host=50,  # Per-host connection limit
+        keepalive_timeout=60,  # Keep connections alive longer
+        enable_cleanup_closed=True
+    )
+    timeout = aiohttp.ClientTimeout(total=30, connect=10)  # Increased timeout
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        # Limit concurrent requests to avoid overwhelming the server
+        semaphore = asyncio.Semaphore(20)  # Max 20 concurrent requests
+        
+        async def fetch_with_semaphore(coro):
+            async with semaphore:
+                return await coro
+        
+        # First, get all filters concurrently (smaller number of requests)
+        filter_tasks = [fetch_with_semaphore(_tata_get_filters(session, cfg)) for cfg in TATA_MODEL_CONFIGS]
+        filters_list = await asyncio.gather(*filter_tasks, return_exceptions=True)
+        
+        # Handle any failed filter requests
+        valid_configs = []
+        for i, result in enumerate(filters_list):
+            if not isinstance(result, Exception):
+                valid_configs.append((TATA_MODEL_CONFIGS[i], result))
+            else:
+                print(f"Failed to get filters for {TATA_MODEL_CONFIGS[i]['name']}: {result}")
+
+        # Then batch the price requests
+        tasks = []
+        for cfg, filter_map in valid_configs:
+            fuels = list(filter_map["fuel_type"].keys())
+            trans = list(filter_map["transmission_type"].keys())
+            editions = list(filter_map["edition"].keys()) or TATA_EDITION_LIST
+            for edition, fuel, tran in itertools.product(editions, fuels, trans):
+                tasks.append(fetch_with_semaphore(_tata_fetch_one(session, cfg, edition, fuel, tran)))
+
+        # Process in batches to avoid memory issues with too many concurrent tasks
+        batch_size = 50
+        results = []
+        for i in range(0, len(tasks), batch_size):
+            batch = tasks[i:i + batch_size]
+            batch_results = await asyncio.gather(*batch, return_exceptions=True)
+            results.extend([r for r in batch_results if not isinstance(r, Exception)])
+        for r in results:
             if r:
                 rows.extend(r)
+    
+    end_time = time.time()
+    duration = end_time - start_time
+    total_requests = len(tasks) + len(TATA_MODEL_CONFIGS)  # Price requests + filter requests
+    print(f"✅ Tata scraping completed in {duration:.2f}s")
+    print(f"📊 {len(rows)} variants scraped from {total_requests} API calls")
+    print(f"⚡ Average: {total_requests/duration:.1f} requests/second")
+    
     return rows
+
 
 # =====================
 # MARUTI SCRAPER (parallel by model)
@@ -245,8 +331,8 @@ def _maruti_fetch_arena_model(modelCd, modelName):
                                       v.get("variantName", "").replace(modelName, "").replace("AGS", "AMT")).strip(),
                     "Price": price
                 })
-    except:
-        pass
+    except Exception as e:
+        print(f"❌ Error fetching Maruti Arena model {modelName}: {e}")
     return rows
 
 def _maruti_fetch_nexa_model(modelCd, modelName):
@@ -290,8 +376,8 @@ def _maruti_fetch_nexa_model(modelCd, modelName):
                                       variant.get("variantName", "").replace(modelName, "").replace("AGS", "AMT")).strip(),
                     "Price": int(round(price))
                 })
-    except:
-        pass
+    except Exception as e:
+        print(f"❌ Error fetching Maruti Nexa model {modelName}: {e}")
     return rows
 
 def fetch_maruti_prices_parallel():
@@ -413,8 +499,8 @@ def _hyundai_fetch_one(model):
                 "Variant": variant_name,
                 "Price": price_rupees
             })
-    except:
-        pass
+    except Exception as e:
+        print(f"❌ Error fetching Hyundai model {model['modelName']}: {e}")
     return rows
 
 def fetch_hyundai_prices_parallel():
@@ -474,7 +560,6 @@ def _mahindra_fetch_one(model):
         price_tag = soup.find("span", {"class": "approx-price"})
         price_text = price_tag.text.strip() if price_tag else "N/A"
         price_int = _parse_price_rupees(price_text)
-        variant_name = variant_name.strip()
         fuel = ""
         transmission = ""
 
@@ -495,6 +580,8 @@ def _mahindra_fetch_one(model):
         elif re.search(r"\bMT\b", variant_name, flags=re.IGNORECASE):
             transmission = "Manual"
 
+        variant_name = re.sub(r'\b(Petrol|Diesel|CNG|EV|Hybrid)\b', '', variant_name, flags=re.I)
+        variant_name = variant_name.strip()
         rows.append({
             "Brand": "Mahindra",
             "Model": model["name"],
@@ -530,6 +617,22 @@ TOYOTA_HEADERS = {
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                   "Chrome/139.0.0.0 Safari/537.36"
 }
+def normalize_toyota_fuel(fuel: str) -> str:
+    if not fuel:
+        return "NA"
+    fuel = fuel.upper().strip()
+    if fuel == "C":
+        return "CNG"
+    if fuel == "P":
+        return "Petrol"
+    if fuel == "D":
+        return "Diesel"
+    if fuel == "H":
+        return "Hybrid"
+    if fuel in ["E", "EV"]:
+        return "EV"
+    return fuel.title()
+
 
 # ----------------------------
 # Function 1: Fetch all models
@@ -565,6 +668,8 @@ def _toyota_prices(dealer_id, model_id, model_name):
             # get the *variant name* only from direct children of <PriceGrade>
             variant_tag = grade.find("Name", recursive=False)
             variant = variant_tag.text.strip() if variant_tag else ""
+            variant = re.sub(r"\b2WD \b", "", variant)
+            variant=re.sub(r"\[.*?]", "", variant)
 
             fuel_tag = grade.find("FuelType", recursive=False)
             fuel = fuel_tag.text.strip() if fuel_tag else ""
@@ -580,7 +685,7 @@ def _toyota_prices(dealer_id, model_id, model_name):
         rows.append({
             "Brand": "Toyota",
             "Model": model_name,
-            "Fuel": fuel,
+            "Fuel": normalize_toyota_fuel(fuel),
             "Transmission": trans,
             "Variant": variant,
             "Price": amount
@@ -694,86 +799,97 @@ def fetch_kia_prices(state="DL", city="N10", workers=8):
 # =====================
 # MG SCRAPER
 # =====================
+
+MG_API = "https://eeysubngbk.execute-api.ap-south-1.amazonaws.com/prod/api/variants"
 MG_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Content-Type": "application/json",
+    "Origin": "https://www.mgmotor.co.in",
+    "Referer": "https://www.mgmotor.co.in/",
+    "x-api-key": "xuQ7dH6jOq7L0ZmHVWkEw5HPYwXWYB2L8ASWJPn1",
 }
 
-MG_URL = "https://www.mgmotor.co.in"
-
-
-# ----------------------------
-# Function 1: Fetch all MG models
-# ----------------------------
-def fetch_mg_models():
-    """Fetch all MG models (name + URL)."""
-    resp = requests.get(MG_URL, headers=MG_HEADERS)
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    models = []
-    for li in soup.select("ul#vechicles li a"):
-        model_name = li.get_text(strip=True)
-        model_url = MG_URL + li['href']
-        models.append({
-            "name": model_name,
-            "url": model_url
-        })
-    return models
-
+def normalize_mg_trans(raw: str) -> str:
+    if not raw:
+        return "NA"
+    raw = raw.upper()
+    if "AUTM" in raw:
+        return "AT"
+    if "MANL" in raw:
+        return "MT"
+    return raw
 
 # ----------------------------
-# Function 2: Fetch variants & prices for a model
+# Map Fuel Type Codes
 # ----------------------------
-def _mg_prices(model_name, model_url):
-    """Fetch variant, fuel, transmission, and price for an MG model."""
-    resp = requests.get(model_url, headers=MG_HEADERS)
-    soup = BeautifulSoup(resp.text, "html.parser")
+FUEL_MAP_MG = {
+    "01": "Diesel",
+    "02": "Petrol",
+    "05": "EV"
+}
 
+def clean_mg_variant(variant: str) -> str:
+    if not variant:
+        return ""
+
+    # Remove brand/model names (case-insensitive)
+    name = re.sub(r"\b(?:MG|Astor|Hector|Gloster|Comet|ZS|Hectorplus6|Hectorplus7)\b", "", variant, flags=re.I)
+
+    # Remove fuel types
+    name = re.sub(r"\b(?:Petrol|Diesel|EV|Dsl|Hybrid)\b", "", name, flags=re.I)
+
+    # Remove transmission types
+    name = re.sub(r"\b(?:iMT|MT|AT|IVT|DCT|CVT|6MT)\b", "", name, flags=re.I)
+
+    # Remove seat/number codes like 6S, 7S
+    name = re.sub(r"\b\d+[A-Z]*\b", "", name, flags=re.I)
+
+    # Clean separators and spaces
+    name = re.sub(r"\s*-\s*", " ", name)
+    name = re.sub(r"\s+", " ", name)
+
+    return name.strip().title()
+
+
+
+def normalize_mg_fuel(code: str) -> str:
+    return FUEL_MAP_MG.get(code, "NA")
+
+# ----------------------------
+# Fetch MG Variants
+# ----------------------------
+def fetch_mg_prices(state="Delhi", city="Delhi"):
+    resp = requests.get(MG_API, headers=MG_HEADERS)
+    data = resp.json()
     rows = []
-    for card in soup.select("div.item[data-attribute='model-variant']"):
-        # Variant name
-        variant_tag = card.select_one("p.card-text")
-        variant = variant_tag.get_text(strip=True) if variant_tag else ""
 
-        # Price
-        price_tag = card.select_one("p.model-price")
-        price = None
-        if price_tag:
-            # Extract numeric value, remove currency symbols and commas
-            price_text = price_tag.get_text(strip=True)
-            price_match = re.search(r"(\d[\d,]*)", price_text)
-            if price_match:
-                price = int(price_match.group(1).replace(",", ""))
+    for model in data:
+        model_line = model.get("modelLine") or model.get("model_line")
+        for v in model.get("variants", []):
+            variant_name = clean_mg_variant(v.get("model_text1", ""))
+            fuel = normalize_mg_fuel(v.get("fuel_type"))
+            transmission = normalize_mg_trans(v.get("vehicle_type"))
 
-        # Fuel & Transmission info: MG site usually doesn't have them; leave empty
-        fuel, trans = "", ""
+            # find Delhi price only
+            price = None
+            for p in v.get("pricing", []):
+                if p.get("State") == state:
+                    for c in p.get("cities", []):
+                        if c.get("City") == city and c.get("price"):
+                            price = float(c["price"].strip())
+                            break
 
-        rows.append({
-            "Brand": "MG Motors",
-            "Model": model_name,
-            "Variant": variant,
-            "Fuel": fuel,
-            "Transmission": trans,
-            "Price": price
-        })
+            if price:
+                rows.append({
+                    "Brand": "MG",
+                    "Model": model_line,
+                    "Variant": variant_name,
+                    "Fuel": fuel,
+                    "Transmission": transmission,
+                    "Price": price
+                })
     return rows
-
-
-# ----------------------------
-# Function 3: Combine everything
-# ----------------------------
-def fetch_mg_prices():
-    all_data = []
-    models = fetch_mg_models()
-    for m in models:
-        model_name, model_url = m["name"], m["url"]
-        try:
-            prices = _mg_prices(model_name, model_url)
-            all_data.extend(prices)
-        except Exception as e:
-            print(f"❌ Failed for {model_name}: {e}")
-    return all_data
 
 
 # =====================
@@ -839,10 +955,10 @@ def parse_fuel_trans(variant):
         trans = "Automatic"
     elif re.search(r'\bMT\b|\bMANUAL', v):
         trans = "Manual"
+    elif re.search(r'\bEZ-SHIFT', v):
+        trans = "AMT"
 
-    if re.search(r'TURBO', v):
-        fuel = "Petrol Turbo"
-    elif re.search(r'DIESEL', v):
+    if re.search(r'DIESEL', v):
         fuel = "Diesel"
     elif re.search(r'PETROL', v):
         fuel = "Petrol"
@@ -852,16 +968,16 @@ def parse_fuel_trans(variant):
 # ----------------------------
 # Clean variant name: remove "Nissan", "New Nissan", and transmission tokens
 # ----------------------------
-def clean_variant_name(variant):
-    # remove Nissan prefix
+def clean_variant_name(variant, model_name):
+    if model_name:
+        variant = re.sub(re.escape(model_name), '', variant, flags=re.I)
     variant = re.sub(r'^(New\s+)?Nissan\s+', '', variant, flags=re.I)
-    # remove transmission tokens and extra parentheses/brackets remnants
-    variant = re.sub(r'\b(MT|CVT|AT|Manual|Automatic)\b', '', variant, flags=re.I)
-    # collapse multiple spaces and strip
+    variant = re.sub(r'\b(MT|CVT|AT|Manual|Automatic|EZ-SHIFT|X-TRONIC)\b', '', variant, flags=re.I)
     variant = re.sub(r'\s{2,}', ' ', variant).strip()
-    # remove leading/trailing punctuation
     variant = variant.strip(" -–—:;()[]")
+
     return variant
+
 
 
 # ----------------------------
@@ -882,12 +998,12 @@ def _nissan_prices(model_name, tables):
                     clean_price = None
 
                 fuel, trans = parse_fuel_trans(variant_raw)
-                variant = clean_variant_name(variant_raw)
+                variant = clean_variant_name(variant_raw,model_name)
 
                 rows.append({
                     "Brand": "Nissan",
                     "Model": model_name,          # normalized model (no 'Nissan' prefix)
-                    "Fuel": fuel,
+                    "Fuel": "Petrol",
                     "Transmission": trans,
                     "Variant": variant,
                     "Price": clean_price
@@ -915,7 +1031,7 @@ def fetch_nissan_prices():
 def scrape_all_brands_parallel():
     with ThreadPoolExecutor(max_workers=3) as ex:
         f_maruti = ex.submit(fetch_maruti_prices_parallel)
-        f_tata = ex.submit(fetch_tata_prices_parallel)
+        f_tata = ex.submit(lambda: asyncio.run(fetch_tata_prices_async()))
         f_hyundai = ex.submit(fetch_hyundai_prices_parallel)
         f_mahindra = ex.submit(fetch_mahindra_prices_parallel)
         f_toyota = ex.submit(fetch_toyota_prices)
@@ -932,4 +1048,5 @@ def scrape_all_brands_parallel():
         nissan = f_nissan.result()
 
     all_prices = (maruti or []) + (tata or []) + (hyundai or []) + (mahindra or []) + (toyota or []) + (kia or [])+ (mg or []) + (nissan or [])
+    all_prices= remove_duplicates(all_prices)
     return all_prices
