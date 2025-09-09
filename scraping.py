@@ -5,6 +5,9 @@ from requests.adapters import HTTPAdapter
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
+import asyncio
+import aiohttp
+import itertools
 
 def remove_duplicates(prices_list):
     df = pd.DataFrame(prices_list)
@@ -51,9 +54,6 @@ def _parse_price_rupees(v):
 # =====================
 # TATA SCRAPER
 # =====================
-import asyncio
-import aiohttp
-import itertools
 
 # =============================
 # Config
