@@ -383,7 +383,7 @@ def _maruti_fetch_nexa_model(modelCd, modelName):
 def fetch_maruti_prices_parallel():
     arena_models = {
         "DE": "Dzire", "AT": "Alto K10", "VZ": "Brezza", "SI": "Swift",
-        "CL": "Celerio", "WA": "WagonR", "VR": "Eeco", "ER": "Ertiga", "SP": "S-Presso"
+        "CL": "Celerio", "WA": "WagonR", "VR": "Eeco", "ER": "Ertiga", "SP": "S-Presso" , "EC": "Victoris"
     }
     nexa_models = {
         "BZ": "Baleno", "CI": "Ciaz", "FR": "Fronx", "GV": "Grand Vitara",
