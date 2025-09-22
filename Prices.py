@@ -12,7 +12,7 @@ from groq import Groq
 import theme
 from PyPDF2 import PdfReader
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+groq_client = Groq(api_key="GROQ_API_KEY")
 
 def get_groq_summary(text: str):
     """Send text to Groq AI and get a summary/response"""
