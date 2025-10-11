@@ -918,4 +918,3 @@ with tab4:
             initialization.delete_price(record_choice.id)  # ✅ deletes only manual
             st.success("✅ Manual entry deleted.")
             st.rerun()
-
