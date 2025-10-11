@@ -18,9 +18,6 @@ def remove_duplicates(prices_list):
 # =====================
 # CONFIG
 # =====================
-CITY_CODE = "08"  # Maruti city code: 08 = Delhi
-ARENA_CHANNELS = "NRM,NRC"
-NEXA_CHANNEL = "EXC"
 
 # =====================
 # SESSION + HELPERS
@@ -85,25 +82,9 @@ TATA_HEADERS_TEMPLATE = {
     "x-requested-with": "XMLHttpRequest",
 }
 TATA_COOKIES = {"at_check": "true"}
-FILTER_CACHE = {}
-RESPONSE_CACHE = {}  # Cache for API responses
 
-# =============================
-# Cache Management
-# =============================
-def clear_tata_caches():
-    """Clear all Tata-related caches to force fresh data fetch"""
-    global FILTER_CACHE, RESPONSE_CACHE
-    FILTER_CACHE.clear()
-    RESPONSE_CACHE.clear()
-    print("🧹 Cleared Tata caches")
-
-def get_cache_stats():
-    """Get cache statistics"""
-    return {
-        "filter_cache_size": len(FILTER_CACHE),
-        "response_cache_size": len(RESPONSE_CACHE)
-    }
+session = requests.Session()
+FILTER_CACHE = {}  # cache filters per model
 
 # =============================
 # Helpers
@@ -128,9 +109,9 @@ def _clean_variant_name(model_name, raw_name):
     return v.strip(" ,")
 
 # =============================
-# Async fetch functions
+# Fetch filter options (cached)
 # =============================
-async def _tata_get_filters(session, model_cfg):
+def _tata_get_filters(model_cfg):
     if model_cfg["name"] in FILTER_CACHE:
         return FILTER_CACHE[model_cfg["name"]]
 
@@ -146,8 +127,9 @@ async def _tata_get_filters(session, model_cfg):
         "cityId": "India-DL-DELHI"
     }
 
-    async with session.post(url, headers=headers, cookies=TATA_COOKIES, data=payload) as resp:
-        data = await resp.json()
+    resp = session.post(url, headers=headers, cookies=TATA_COOKIES, data=payload, timeout=12)
+    resp.raise_for_status()
+    data = resp.json()
 
     filter_map = {"fuel_type": {}, "transmission_type": {}, "edition": {}}
     for opt in data.get("results", {}).get("filterOptionsList", []):
@@ -159,12 +141,11 @@ async def _tata_get_filters(session, model_cfg):
     FILTER_CACHE[model_cfg["name"]] = filter_map
     return filter_map
 
-async def _tata_fetch_one(session, model_cfg, edition, fuel, trans, max_retries=3):
-    # Create cache key from request parameters
-    cache_key = f"{model_cfg['modelId']}_{edition}_{fuel}_{trans}"
-    if cache_key in RESPONSE_CACHE:
-        return RESPONSE_CACHE[cache_key]
-    
+
+# =============================
+# Fetch prices for one combo
+# =============================
+def _tata_fetch_one(model_cfg, edition, fuel, trans):
     headers = TATA_HEADERS_TEMPLATE.copy()
     headers["referer"] = f"{model_cfg['baseUrl']}/price.html"
     headers["content-type"] = "application/json"
@@ -182,36 +163,24 @@ async def _tata_fetch_one(session, model_cfg, edition, fuel, trans, max_retries=
         ]
     }
 
-    url = f"{model_cfg['baseUrl']}/price.getpricefilteredresult.json"
-    
-    for attempt in range(max_retries):
-        try:
-            async with session.post(url, headers=headers, cookies=TATA_COOKIES, json=payload) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    break
-                elif resp.status in [429, 503, 504]:  # Rate limit or server errors
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(0.5 * (2 ** attempt))  # Exponential backoff
-                        continue
-                else:
-                    print(f"HTTP {resp.status} for {model_cfg['name']} {fuel}/{trans}")
-                    return []
-        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(0.2 * (2 ** attempt))
-                continue
-            else:
-                print(f"Error fetching {model_cfg['name']} {fuel}/{trans}: {e}")
-                return []
+    try:
+        url = f"{model_cfg['baseUrl']}/price.getpricefilteredresult.json"
+        resp = session.post(url, headers=headers, cookies=TATA_COOKIES, json=payload, timeout=12)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"Error fetching {model_cfg['name']} {fuel}/{trans}: {e}")
+        return []
 
     variants = data.get("results", {}).get("variantPriceFeatures", []) or []
     out = []
     for v in variants:
-        price = _parse_tata_price_rupees(v.get("priceDetails", {}).get("originalPrice"))
+        price = _parse_price_rupees(v.get("priceDetails", {}).get("originalPrice"))
         if not price:
             continue
+
         variant_name = _clean_variant_name(model_cfg["name"], v.get("variantLabel", ""))
+
         out.append({
             "Brand": "Tata",
             "Model": model_cfg["name"],
@@ -220,84 +189,58 @@ async def _tata_fetch_one(session, model_cfg, edition, fuel, trans, max_retries=
             "Variant": variant_name,
             "Price": price
         })
-    
-    # Cache successful response
-    RESPONSE_CACHE[cache_key] = out
+
     return out
-
 # =============================
-# Main async fetch
+# Main parallel fetch
 # =============================
-async def fetch_tata_prices_async():
-    import time
-    start_time = time.time()
+def fetch_tata_prices_parallel():
     rows = []
-    print(f"🚀 Starting Tata scraping at {time.strftime('%H:%M:%S')}...")
-    # Optimize connector for higher throughput
-    connector = aiohttp.TCPConnector(
-        ssl=False,
-        limit=100,  # Total connection pool size
-        limit_per_host=50,  # Per-host connection limit
-        keepalive_timeout=60,  # Keep connections alive longer
-        enable_cleanup_closed=True
-    )
-    timeout = aiohttp.ClientTimeout(total=30, connect=10)  # Increased timeout
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        # Limit concurrent requests to avoid overwhelming the server
-        semaphore = asyncio.Semaphore(20)  # Max 20 concurrent requests
-        
-        async def fetch_with_semaphore(coro):
-            async with semaphore:
-                return await coro
-        
-        # First, get all filters concurrently (smaller number of requests)
-        filter_tasks = [fetch_with_semaphore(_tata_get_filters(session, cfg)) for cfg in TATA_MODEL_CONFIGS]
-        filters_list = await asyncio.gather(*filter_tasks, return_exceptions=True)
-        
-        # Handle any failed filter requests
-        valid_configs = []
-        for i, result in enumerate(filters_list):
-            if not isinstance(result, Exception):
-                valid_configs.append((TATA_MODEL_CONFIGS[i], result))
-            else:
-                print(f"Failed to get filters for {TATA_MODEL_CONFIGS[i]['name']}: {result}")
-
-        # Then batch the price requests
-        tasks = []
-        for cfg, filter_map in valid_configs:
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futures = []
+        for cfg in TATA_MODEL_CONFIGS:
+            filter_map = _tata_get_filters(cfg)
             fuels = list(filter_map["fuel_type"].keys())
             trans = list(filter_map["transmission_type"].keys())
             editions = list(filter_map["edition"].keys()) or TATA_EDITION_LIST
-            for edition, fuel, tran in itertools.product(editions, fuels, trans):
-                tasks.append(fetch_with_semaphore(_tata_fetch_one(session, cfg, edition, fuel, tran)))
 
-        # Process in batches to avoid memory issues with too many concurrent tasks
-        batch_size = 50
-        results = []
-        for i in range(0, len(tasks), batch_size):
-            batch = tasks[i:i + batch_size]
-            batch_results = await asyncio.gather(*batch, return_exceptions=True)
-            results.extend([r for r in batch_results if not isinstance(r, Exception)])
-        for r in results:
+            for edition, fuel, tran in itertools.product(editions, fuels, trans):
+                futures.append(ex.submit(_tata_fetch_one, cfg, edition, fuel, tran))
+
+        for f in as_completed(futures):
+            r = f.result()
             if r:
                 rows.extend(r)
-    
-    end_time = time.time()
-    duration = end_time - start_time
-    total_requests = len(tasks) + len(TATA_MODEL_CONFIGS)  # Price requests + filter requests
-    print(f"✅ Tata scraping completed in {duration:.2f}s")
-    print(f"📊 {len(rows)} variants scraped from {total_requests} API calls")
-    print(f"⚡ Average: {total_requests/duration:.1f} requests/second")
-    
     return rows
-
 
 # =====================
 # MARUTI SCRAPER (parallel by model)
 # =====================
+CITY_CODE = "08"  # Maruti city code: 08 = Delhi
+ARENA_CHANNELS = "NRM,NRC"
+VARIANT_URL = f"https://www.marutisuzuki.com/graphql/execute.json/msil-platform/arenaVariantList"
+PRICE_URL = "https://www.marutisuzuki.com/pricing/v2/common/pricing/ex-showroom-detail"
+PLACEHOLDER_URL = "https://www.marutisuzuki.com/placeholders.json"
+def fetch_placeholders():
+    try:
+        res = session.get(PLACEHOLDER_URL, timeout=15)
+        data = res.json().get("data", [])
+        price_str = next((d["Text"] for d in data if "prices" in d["Key"].lower()), "")
+        # Convert "VARIANT:PRICE,..." → dict
+        price_map = {
+            k: int(v)
+            for item in price_str.split(",")
+            if ":" in item
+            for k, v in [item.split(":", 1)]
+        }
+
+        return price_map
+    except Exception as e:
+        print(f"❌ Error fetching placeholders: {e}")
+        return {}
+PLACEHOLDER_PRICES = fetch_placeholders()
+
 def _maruti_fetch_arena_model(modelCd, modelName):
-    VARIANT_URL = f"https://www.marutisuzuki.com/graphql/execute.json/msil-platform/arenaVariantList;modelCd={modelCd}"
-    PRICE_URL = "https://www.marutisuzuki.com/pricing/v2/common/pricing/ex-showroom-detail"
     rows = []
     try:
         var_res = session.get(VARIANT_URL, timeout=15)
@@ -322,10 +265,13 @@ def _maruti_fetch_arena_model(modelCd, modelName):
         for v in variants:
             price = price_map.get(v["variantCd"])
             if price:
+                fuel = v.get("fuelType", "")
+                if fuel.lower() in ["strong-hybrid"]:
+                    fuel = "Petrol"
                 rows.append({
                     "Brand": "Maruti",
                     "Model": modelName,
-                    "Fuel": v.get("fuelType", ""),
+                    "Fuel": fuel,
                     "Transmission": v.get("transmission", ""),
                     "Variant": re.sub(r"\b(5MT|MT)\b", "",
                                       v.get("variantName", "").replace(modelName, "").replace("AGS", "AMT")).strip(),
@@ -335,6 +281,7 @@ def _maruti_fetch_arena_model(modelCd, modelName):
         print(f"❌ Error fetching Maruti Arena model {modelName}: {e}")
     return rows
 
+NEXA_CHANNEL = "EXC"
 def _maruti_fetch_nexa_model(modelCd, modelName):
     ACTIVE_VARIANTS_URL = f"https://www.nexaexperience.com/graphql/execute.json/msil-platform/VariantFeaturesList;modelCd={modelCd};locale=en;"
     PRICES_URL = "https://www.nexaexperience.com/pricing/v2/common/pricing/ex-showroom-detail"
@@ -366,11 +313,13 @@ def _maruti_fetch_nexa_model(modelCd, modelName):
                     transmission = "Manual"
                 elif "AT" in transmission:  # e.g. 4AT, 6AT
                     transmission = "Automatic"
-
+                fuel = variant.get("fuelType", "")
+                if fuel.lower() in ["strong-hybrid"]:
+                    fuel = "Petrol"
                 rows.append({
                     "Brand": "Maruti",
                     "Model": modelName,
-                    "Fuel": variant.get("fuelType", ""),
+                    "Fuel": fuel,
                     "Transmission": transmission,
                     "Variant": re.sub(r"\b(5MT|MT)\b", "",
                                       variant.get("variantName", "").replace(modelName, "").replace("AGS", "AMT")).strip(),
@@ -383,7 +332,7 @@ def _maruti_fetch_nexa_model(modelCd, modelName):
 def fetch_maruti_prices_parallel():
     arena_models = {
         "DE": "Dzire", "AT": "Alto K10", "VZ": "Brezza", "SI": "Swift",
-        "CL": "Celerio", "WA": "WagonR", "VR": "Eeco", "ER": "Ertiga", "SP": "S-Presso" , "EC": "victoris"
+        "CL": "Celerio", "WA": "WagonR", "VR": "Eeco", "ER": "Ertiga", "SP": "S-Presso", "EC": "victoris"
     }
     nexa_models = {
         "BZ": "Baleno", "CI": "Ciaz", "FR": "Fronx", "GV": "Grand Vitara",
@@ -542,6 +491,7 @@ def _mahindra_fetch_one(model):
     try:
         resp = session.get(MAHINDRA_BASE_URL, params=params, timeout=20)
         data = resp.json()
+
     except Exception as e:
         print(f"Failed to fetch {model['name']}: {e}")
         return []
@@ -1031,7 +981,7 @@ def fetch_nissan_prices():
 def scrape_all_brands_parallel():
     with ThreadPoolExecutor(max_workers=3) as ex:
         f_maruti = ex.submit(fetch_maruti_prices_parallel)
-        f_tata = ex.submit(lambda: asyncio.run(fetch_tata_prices_async()))
+        f_tata = ex.submit(fetch_tata_prices_parallel)
         f_hyundai = ex.submit(fetch_hyundai_prices_parallel)
         f_mahindra = ex.submit(fetch_mahindra_prices_parallel)
         f_toyota = ex.submit(fetch_toyota_prices)
