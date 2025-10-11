@@ -116,9 +116,18 @@ def _tata_get_filters(model_cfg):
         return FILTER_CACHE[model_cfg["name"]]
 
     url = f"{model_cfg['baseUrl']}/price.getpricefilteroptions.json"
-    headers = TATA_HEADERS_TEMPLATE.copy()
-    headers["referer"] = f"{model_cfg['baseUrl']}/price.html"
-    headers["content-type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+
+    # Expanded realistic headers to mimic browser
+    headers = {
+        "accept": "application/json, text/javascript, */*; q=0.01",
+        "accept-language": "en-US,en;q=0.9",
+        "origin": "https://cars.tatamotors.com",
+        "referer": f"{model_cfg['baseUrl']}/price.html",
+        "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "x-requested-with": "XMLHttpRequest",
+    }
 
     payload = {
         "vehicleCategory": "TMPC",
@@ -127,10 +136,25 @@ def _tata_get_filters(model_cfg):
         "cityId": "India-DL-DELHI"
     }
 
-    resp = session.post(url, headers=headers, cookies=TATA_COOKIES, data=payload, timeout=12)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = session.post(url, headers=headers, cookies=TATA_COOKIES, data=payload, timeout=12)
 
+        # If 403, fail gracefully
+        if resp.status_code == 403:
+            print(f"[WARN] Tata blocked filter fetch for {model_cfg['name']} (403 Forbidden). Skipping model.")
+            empty_map = {"fuel_type": {}, "transmission_type": {}, "edition": {}}
+            FILTER_CACHE[model_cfg["name"]] = empty_map
+            return empty_map
+
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[WARN] Tata request failed for {model_cfg['name']}: {e}")
+        empty_map = {"fuel_type": {}, "transmission_type": {}, "edition": {}}
+        FILTER_CACHE[model_cfg["name"]] = empty_map
+        return empty_map
+
+    # Extract filters normally
     filter_map = {"fuel_type": {}, "transmission_type": {}, "edition": {}}
     for opt in data.get("results", {}).get("filterOptionsList", []):
         ftype = opt.get("filterType")
@@ -140,6 +164,7 @@ def _tata_get_filters(model_cfg):
 
     FILTER_CACHE[model_cfg["name"]] = filter_map
     return filter_map
+
 
 
 # =============================
