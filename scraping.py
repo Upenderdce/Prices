@@ -390,7 +390,7 @@ def fetch_maruti_prices_parallel():
         "IG": "Ignis", "IN": "Invicto", "JM": "Jimny", "XL": "XL6"
     }
     rows = []
-    with ThreadPoolExecutor(max_workers=12) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         futures = []
         for cd, name in arena_models.items():
             futures.append(ex.submit(_maruti_fetch_arena_model, cd, name))
