@@ -103,8 +103,6 @@ df_filtered = df[
     (df["price_lakhs"] <= price_range[1])
     ].copy()
 
-print(df_filtered)
-
 if df_filtered.empty:
     st.warning("No data matches selected filters.")
     st.stop()
@@ -219,7 +217,7 @@ with tab1:
     # =====================
     chart_type = st.radio(
         "Select Chart Type",
-        ["Price Range", "Scatter Plot", "Violin Plot", "Line Chart", "Treemap"],  # NEW OPTION
+        ["Price Range", "Fuel-wise Range Bar","Scatter Plot", "Violin Plot", "Line Chart", "Treemap"],  # NEW OPTION
         horizontal=True
     )
     # ---------------------
@@ -264,6 +262,76 @@ with tab1:
             marker=dict(color="dark blue", size=9, line=dict(width=1, color="white")),
             cliponaxis=False
         ))
+
+    elif chart_type == "Fuel-wise Range Bar":
+        import numpy as np
+
+        df_range = (
+            df_filtered.groupby(["model", "fuel"], observed=True)["price_lakhs"]
+            .agg(min_price="min", max_price="max")
+            .reset_index()
+        )
+
+        models = list(df_filtered["model"].unique())
+        x_positions = {model: idx for idx, model in enumerate(models)}
+        desired_fuel_order = ["Petrol", "CNG", "strong-hybrid","Diesel"]  # Customize order here
+        fuels = [f for f in desired_fuel_order if f in df_range["fuel"].unique()]
+
+        num_fuels = len(fuels)
+
+        bar_width = 0.8 / num_fuels
+
+        fig = go.Figure()
+
+        # 1️⃣ Plot range bars grouped by fuel
+        for i, fuel in enumerate(fuels):
+            fuel_data = df_range[df_range["fuel"] == fuel]
+            group_gap = 0.15  # adjust between 0.1 - 0.3 as per your need
+
+            x_vals = [
+                x_positions[m]
+                - 0.4
+                + (i + 0.5) * bar_width
+                + i * group_gap  # ✅ Push each fuel group slightly outward
+                for m in fuel_data["model"]
+            ]
+
+            fig.add_trace(
+                go.Bar(
+                    x=x_vals,
+                    y=fuel_data["max_price"] - fuel_data["min_price"],
+                    base=fuel_data["min_price"],
+                    width=bar_width * 0.5,
+                    name=fuel,
+                    marker=dict(opacity=0.5),
+                )
+            )
+
+        # 2️⃣ Scatter aligned exactly over the fuel bars
+        for i, fuel in enumerate(fuels):
+            fuel_data = df_filtered[df_filtered["fuel"] == fuel]
+            x_scatter = [x_positions[m] - 0.4 + (i + 0.5) * bar_width + i * group_gap for m in fuel_data["model"]]
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_scatter,
+                    y=fuel_data["price_lakhs"],
+                    mode="markers+text",
+                    name=f"{fuel} Variants",
+                    text=fuel_data["label"],
+                    textposition="middle right",
+                    marker=dict(size=9, line=dict(width=1, color="white")),
+                    showlegend=False
+                )
+            )
+
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=list(x_positions.values()),  # numeric positions of bars
+            ticktext=list(x_positions.keys()),  # model names only
+            tickangle=-0  # or 0 if you prefer horizontal
+        )
+
 
     # ---------------------
     # Scatter Plot
@@ -918,3 +986,4 @@ with tab4:
             initialization.delete_price(record_choice.id)  # ✅ deletes only manual
             st.success("✅ Manual entry deleted.")
             st.rerun()
+
