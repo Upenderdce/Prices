@@ -11,6 +11,7 @@ import scraping
 from groq import Groq
 import theme
 from PyPDF2 import PdfReader
+import os
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
